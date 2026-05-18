@@ -120,6 +120,75 @@ event: done\n\n"
 }
 
 #[tokio::test]
+async fn post_json_returns_when_done_event_has_empty_data() {
+    let chunks = vec![b"event: response.output_text.delta\n\
+data: {\"type\":\"response.output_text.delta\",\"delta\":\"empty data done\"}\n\n\
+event: done\n\
+data:\n\n"
+        .to_vec()];
+    let base = spawn_sse_server(false, chunks).await;
+    let client = build_client(Duration::from_secs(5));
+
+    let raw = post_json(
+        &client,
+        &format!("{}/v1/responses", base),
+        "dummy-key",
+        &json!({"model": "grok-4-fast", "input": "test", "stream": false}),
+        "Grok Responses",
+    )
+    .await
+    .expect("event: done with empty data should terminate the SSE stream");
+
+    assert_eq!(raw["output_text"], "empty data done");
+}
+
+#[tokio::test]
+async fn post_json_splits_cr_only_sse_events() {
+    let chunks = vec![b"event: response.output_text.delta\r\
+data: {\"type\":\"response.output_text.delta\",\"delta\":\"cr done\"}\r\r\
+event: done\r\r"
+        .to_vec()];
+    let base = spawn_sse_server(false, chunks).await;
+    let client = build_client(Duration::from_secs(5));
+
+    let raw = post_json(
+        &client,
+        &format!("{}/v1/responses", base),
+        "dummy-key",
+        &json!({"model": "grok-4-fast", "input": "test", "stream": false}),
+        "Grok Responses",
+    )
+    .await
+    .expect("CR-only SSE frame delimiters should be recognized");
+
+    assert_eq!(raw["output_text"], "cr done");
+}
+
+#[tokio::test]
+async fn post_json_strips_initial_sse_bom() {
+    let chunks = vec![
+        "\u{feff}data: {\"type\":\"response.output_text.delta\",\"delta\":\"bom ok\"}\n\n\
+event: done\n\n"
+            .as_bytes()
+            .to_vec(),
+    ];
+    let base = spawn_sse_server(false, chunks).await;
+    let client = build_client(Duration::from_secs(5));
+
+    let raw = post_json(
+        &client,
+        &format!("{}/v1/responses", base),
+        "dummy-key",
+        &json!({"model": "grok-4-fast", "input": "test", "stream": false}),
+        "Grok Responses",
+    )
+    .await
+    .expect("initial SSE BOM should not hide the first data field");
+
+    assert_eq!(raw["output_text"], "bom ok");
+}
+
+#[tokio::test]
 async fn post_json_decodes_sse_utf8_after_full_event_boundary() {
     let body = "event: response.output_text.delta\n\
 data: {\"type\":\"response.output_text.delta\",\"delta\":\"你好\"}\n\n\
@@ -152,6 +221,7 @@ data: {\"type\":\"response.completed\"}\n\n";
 async fn post_json_preserves_chat_stream_metadata() {
     let chunks = vec![
         b"data: {\"choices\":[{\"delta\":{\"content\":\"answer\",\"annotations\":[{\"type\":\"url_citation\",\"url\":\"https://example.com/a\",\"title\":\"A\"}]}}],\"search_sources\":[{\"url\":\"https://example.com/b\",\"title\":\"B\"}]}\n\n\
+data: {\"choices\":[{\"finish_reason\":\"stop\"}]}\n\n\
 event: done\n\n"
             .to_vec(),
     ];
