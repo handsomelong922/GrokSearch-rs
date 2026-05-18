@@ -136,16 +136,15 @@ struct SseEvent {
 }
 
 fn split_sse_event(buffer: &[u8]) -> Option<(&[u8], &[u8])> {
-    if let Some(index) = find_bytes(buffer, b"\n\n") {
-        return Some((&buffer[..index], &buffer[index + 2..]));
-    }
-    if let Some(index) = find_bytes(buffer, b"\r\n\r\n") {
-        return Some((&buffer[..index], &buffer[index + 4..]));
-    }
-    if let Some(index) = find_bytes(buffer, b"\r\r") {
-        return Some((&buffer[..index], &buffer[index + 2..]));
-    }
-    None
+    let delimiter = [
+        b"\n\n".as_slice(),
+        b"\r\n\r\n".as_slice(),
+        b"\r\r".as_slice(),
+    ]
+    .into_iter()
+    .filter_map(|delimiter| find_bytes(buffer, delimiter).map(|index| (index, delimiter.len())))
+    .min_by_key(|(index, _)| *index)?;
+    Some((&buffer[..delimiter.0], &buffer[delimiter.0 + delimiter.1..]))
 }
 
 fn find_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
@@ -331,6 +330,9 @@ fn finish_sse_json(
         return Ok(serde_json::json!({ "output_text": output_text }));
     }
     if !chat_content.is_empty() {
+        return Ok(synthesize_chat_json(last_json, chat_metadata, chat_content));
+    }
+    if chat_metadata.is_some() {
         return Ok(synthesize_chat_json(last_json, chat_metadata, chat_content));
     }
     last_json.ok_or_else(|| {

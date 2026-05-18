@@ -165,6 +165,30 @@ event: done\r\r"
 }
 
 #[tokio::test]
+async fn post_json_uses_earliest_mixed_sse_delimiter() {
+    let chunks = vec![
+        b"data: {\"type\":\"response.output_text.delta\",\"delta\":\"first\"}\r\n\r\n\
+data: {\"type\":\"response.output_text.delta\",\"delta\":\" second\"}\n\n\
+event: done\n\n"
+            .to_vec(),
+    ];
+    let base = spawn_sse_server(false, chunks).await;
+    let client = build_client(Duration::from_secs(5));
+
+    let raw = post_json(
+        &client,
+        &format!("{}/v1/responses", base),
+        "dummy-key",
+        &json!({"model": "grok-4-fast", "input": "test", "stream": false}),
+        "Grok Responses",
+    )
+    .await
+    .expect("mixed SSE delimiters should split at the earliest event boundary");
+
+    assert_eq!(raw["output_text"], "first second");
+}
+
+#[tokio::test]
 async fn post_json_strips_initial_sse_bom() {
     let chunks = vec![
         "\u{feff}data: {\"type\":\"response.output_text.delta\",\"delta\":\"bom ok\"}\n\n\
@@ -186,6 +210,38 @@ event: done\n\n"
     .expect("initial SSE BOM should not hide the first data field");
 
     assert_eq!(raw["output_text"], "bom ok");
+}
+
+#[tokio::test]
+async fn post_json_preserves_metadata_only_chat_stream() {
+    let chunks = vec![
+        b"data: {\"choices\":[{\"delta\":{\"annotations\":[{\"type\":\"url_citation\",\"url\":\"https://example.com/meta\",\"title\":\"Meta\"}]}}],\"search_sources\":[{\"url\":\"https://example.com/source\",\"title\":\"Source\"}]}\n\n\
+data: {\"choices\":[{\"finish_reason\":\"stop\"}]}\n\n\
+event: done\n\n"
+            .to_vec(),
+    ];
+    let base = spawn_sse_server(true, chunks).await;
+    let client = build_client(Duration::from_secs(5));
+
+    let raw = post_json(
+        &client,
+        &format!("{}/v1/chat/completions", base),
+        "dummy-key",
+        &json!({"model": "grok-4-fast", "messages": [], "stream": true}),
+        "OpenAI-compatible",
+    )
+    .await
+    .expect("metadata-only chat SSE should preserve source provenance");
+
+    let parsed = parse_chat_completions(&raw).expect("metadata-only chat response has sources");
+    assert!(parsed.content.is_empty());
+    let urls: Vec<_> = parsed
+        .sources
+        .iter()
+        .map(|source| source.url.as_str())
+        .collect();
+    assert!(urls.contains(&"https://example.com/meta"));
+    assert!(urls.contains(&"https://example.com/source"));
 }
 
 #[tokio::test]
