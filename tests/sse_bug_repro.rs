@@ -4,15 +4,17 @@ use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 
+use grok_search_rs::adapters::chat_completions_response::parse_chat_completions;
 use grok_search_rs::providers::http::{build_client, post_json};
 use serde_json::json;
 
-async fn spawn_sse_server(expected_stream: bool) -> String {
+async fn spawn_sse_server(expected_stream: bool, chunks: Vec<Vec<u8>>) -> String {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
 
     tokio::spawn(async move {
         loop {
+            let chunks = chunks.clone();
             let (mut sock, _) = match listener.accept().await {
                 Ok(s) => s,
                 Err(_) => return,
@@ -31,18 +33,13 @@ async fn spawn_sse_server(expected_stream: bool) -> String {
                     return;
                 }
 
-                let body = b"event: response.created\n\
-data: {\"type\":\"response.created\"}\n\n\
-event: response.output_text.delta\n\
-data: {\"type\":\"response.output_text.delta\",\"delta\":\"streamed answer\"}\n\n\
-event: response.completed\n\
-data: {\"type\":\"response.completed\"}\n\n";
-
                 let resp = "HTTP/1.1 200 OK\r\n\
                      Content-Type: text/event-stream\r\n\
                      Connection: keep-alive\r\n\r\n";
                 let _ = sock.write_all(resp.as_bytes()).await;
-                let _ = sock.write_all(body).await;
+                for chunk in chunks {
+                    let _ = sock.write_all(&chunk).await;
+                }
 
                 // 不 shutdown：服务端保持连接，客户端必须在 completed 后主动结束读取。
                 let mut one = [0u8; 1];
@@ -54,9 +51,19 @@ data: {\"type\":\"response.completed\"}\n\n";
     format!("http://{}", addr)
 }
 
+fn responses_chunks() -> Vec<Vec<u8>> {
+    vec![b"event: response.created\n\
+data: {\"type\":\"response.created\"}\n\n\
+event: response.output_text.delta\n\
+data: {\"type\":\"response.output_text.delta\",\"delta\":\"streamed answer\"}\n\n\
+event: response.completed\n\
+data: {\"type\":\"response.completed\"}\n\n"
+        .to_vec()]
+}
+
 #[tokio::test]
 async fn post_json_returns_when_stream_true_sse_completed_without_connection_close() {
-    let base = spawn_sse_server(true).await;
+    let base = spawn_sse_server(true, responses_chunks()).await;
     let client = build_client(Duration::from_secs(5));
 
     let raw = post_json(
@@ -74,7 +81,7 @@ async fn post_json_returns_when_stream_true_sse_completed_without_connection_clo
 
 #[tokio::test]
 async fn post_json_returns_when_stream_false_still_gets_sse() {
-    let base = spawn_sse_server(false).await;
+    let base = spawn_sse_server(false, responses_chunks()).await;
     let client = build_client(Duration::from_secs(5));
 
     let raw = post_json(
@@ -88,4 +95,86 @@ async fn post_json_returns_when_stream_false_still_gets_sse() {
     .expect("SSE stream should be normalized even when stream:false is ignored");
 
     assert_eq!(raw["output_text"], "streamed answer");
+}
+
+#[tokio::test]
+async fn post_json_returns_when_done_event_has_no_data() {
+    let chunks = vec![b"event: response.output_text.delta\n\
+data: {\"type\":\"response.output_text.delta\",\"delta\":\"done marker\"}\n\n\
+event: done\n\n"
+        .to_vec()];
+    let base = spawn_sse_server(false, chunks).await;
+    let client = build_client(Duration::from_secs(5));
+
+    let raw = post_json(
+        &client,
+        &format!("{}/v1/responses", base),
+        "dummy-key",
+        &json!({"model": "grok-4-fast", "input": "test", "stream": false}),
+        "Grok Responses",
+    )
+    .await
+    .expect("event: done without data should terminate the SSE stream");
+
+    assert_eq!(raw["output_text"], "done marker");
+}
+
+#[tokio::test]
+async fn post_json_decodes_sse_utf8_after_full_event_boundary() {
+    let body = "event: response.output_text.delta\n\
+data: {\"type\":\"response.output_text.delta\",\"delta\":\"你好\"}\n\n\
+event: response.completed\n\
+data: {\"type\":\"response.completed\"}\n\n";
+    let bytes = body.as_bytes();
+    let split = bytes
+        .windows("你好".len())
+        .position(|window| window == "你好".as_bytes())
+        .expect("test body contains multibyte text")
+        + 1;
+    let chunks = vec![bytes[..split].to_vec(), bytes[split..].to_vec()];
+    let base = spawn_sse_server(false, chunks).await;
+    let client = build_client(Duration::from_secs(5));
+
+    let raw = post_json(
+        &client,
+        &format!("{}/v1/responses", base),
+        "dummy-key",
+        &json!({"model": "grok-4-fast", "input": "test", "stream": false}),
+        "Grok Responses",
+    )
+    .await
+    .expect("SSE UTF-8 should be decoded after full event buffering");
+
+    assert_eq!(raw["output_text"], "你好");
+}
+
+#[tokio::test]
+async fn post_json_preserves_chat_stream_metadata() {
+    let chunks = vec![
+        b"data: {\"choices\":[{\"delta\":{\"content\":\"answer\",\"annotations\":[{\"type\":\"url_citation\",\"url\":\"https://example.com/a\",\"title\":\"A\"}]}}],\"search_sources\":[{\"url\":\"https://example.com/b\",\"title\":\"B\"}]}\n\n\
+event: done\n\n"
+            .to_vec(),
+    ];
+    let base = spawn_sse_server(true, chunks).await;
+    let client = build_client(Duration::from_secs(5));
+
+    let raw = post_json(
+        &client,
+        &format!("{}/v1/chat/completions", base),
+        "dummy-key",
+        &json!({"model": "grok-4-fast", "messages": [], "stream": true}),
+        "OpenAI-compatible",
+    )
+    .await
+    .expect("chat SSE should be normalized into a metadata-preserving response");
+
+    let parsed = parse_chat_completions(&raw).expect("chat response should preserve sources");
+    assert_eq!(parsed.content, "answer");
+    let urls: Vec<_> = parsed
+        .sources
+        .iter()
+        .map(|source| source.url.as_str())
+        .collect();
+    assert!(urls.contains(&"https://example.com/a"));
+    assert!(urls.contains(&"https://example.com/b"));
 }

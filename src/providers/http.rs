@@ -73,7 +73,7 @@ pub async fn post_json(
 }
 
 async fn read_sse_json(response: &mut Response, label: &str) -> Result<Value> {
-    let mut buffer = String::new();
+    let mut buffer = Vec::new();
     let mut output_text = String::new();
     let mut chat_content = String::new();
     let mut last_json = None;
@@ -83,23 +83,26 @@ async fn read_sse_json(response: &mut Response, label: &str) -> Result<Value> {
         .await
         .map_err(|err| GrokSearchError::Provider(format!("{label} stream read failed: {err}")))?
     {
-        let text = String::from_utf8_lossy(&chunk);
-        buffer.push_str(&text);
+        buffer.extend_from_slice(&chunk);
 
         while let Some((event, rest)) = split_sse_event(&buffer) {
-            let event = event.to_string();
-            buffer = rest.to_string();
-            let Some(data) = collect_sse_data(&event) else {
+            let event = event.to_vec();
+            buffer = rest.to_vec();
+            let event = parse_sse_event(&event, label)?;
+
+            if event.name.as_deref().is_some_and(is_completion_event_name) && event.data.is_none() {
+                return finish_sse_json(label, last_json, output_text, chat_content);
+            }
+
+            let Some(data) = event.data.as_deref().map(str::trim) else {
                 continue;
             };
-            let data = data.trim();
             if data.is_empty() {
                 continue;
             }
             if data == "[DONE]" {
                 return finish_sse_json(label, last_json, output_text, chat_content);
             }
-
             let value: Value = serde_json::from_str(data).map_err(|err| {
                 GrokSearchError::Parse(format!("invalid {label} SSE JSON: {err}"))
             })?;
@@ -122,28 +125,96 @@ async fn read_sse_json(response: &mut Response, label: &str) -> Result<Value> {
     finish_sse_json(label, last_json, output_text, chat_content)
 }
 
-fn split_sse_event(buffer: &str) -> Option<(&str, &str)> {
-    if let Some(index) = buffer.find("\n\n") {
+struct SseEvent {
+    name: Option<String>,
+    data: Option<String>,
+}
+
+fn split_sse_event(buffer: &[u8]) -> Option<(&[u8], &[u8])> {
+    if let Some(index) = find_bytes(buffer, b"\n\n") {
         return Some((&buffer[..index], &buffer[index + 2..]));
     }
-    if let Some(index) = buffer.find("\r\n\r\n") {
+    if let Some(index) = find_bytes(buffer, b"\r\n\r\n") {
         return Some((&buffer[..index], &buffer[index + 4..]));
     }
     None
 }
 
-fn collect_sse_data(event: &str) -> Option<String> {
+fn find_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    haystack
+        .windows(needle.len())
+        .position(|window| window == needle)
+}
+
+fn parse_sse_event(event: &[u8], label: &str) -> Result<SseEvent> {
+    let event = std::str::from_utf8(event)
+        .map_err(|err| GrokSearchError::Parse(format!("invalid {label} SSE UTF-8: {err}")))?;
+    let mut name = None;
     let mut lines = Vec::new();
     for line in event.lines() {
         let line = line.trim_end_matches('\r');
+        if let Some(event_name) = line.strip_prefix("event:") {
+            name = Some(event_name.trim_start().to_string());
+            continue;
+        }
         if let Some(data) = line.strip_prefix("data:") {
             lines.push(data.trim_start());
         }
     }
-    if lines.is_empty() {
-        None
+
+    Ok(SseEvent {
+        name,
+        data: if lines.is_empty() {
+            None
+        } else {
+            Some(lines.join("\n"))
+        },
+    })
+}
+
+fn is_completion_event_name(name: &str) -> bool {
+    matches!(
+        name,
+        "done" | "end" | "complete" | "completed" | "response.completed"
+    )
+}
+
+fn synthesize_chat_json(last_json: Option<Value>, chat_content: String) -> Value {
+    let mut raw = last_json.unwrap_or_else(|| serde_json::json!({}));
+    if !raw.is_object() {
+        raw = serde_json::json!({});
+    }
+
+    let message = raw
+        .pointer("/choices/0/message")
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!({}));
+    let delta = raw
+        .pointer("/choices/0/delta")
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!({}));
+
+    let mut message = match message {
+        Value::Object(map) => map,
+        _ => serde_json::Map::new(),
+    };
+    if let Value::Object(delta) = delta {
+        for key in ["annotations", "citations"] {
+            if !message.contains_key(key) {
+                if let Some(value) = delta.get(key) {
+                    message.insert(key.to_string(), value.clone());
+                }
+            }
+        }
+    }
+    message.insert("content".to_string(), Value::String(chat_content));
+
+    let choice = serde_json::json!({ "message": Value::Object(message) });
+    if let Some(object) = raw.as_object_mut() {
+        object.insert("choices".to_string(), Value::Array(vec![choice]));
+        raw
     } else {
-        Some(lines.join("\n"))
+        serde_json::json!({ "choices": [choice] })
     }
 }
 
@@ -183,9 +254,7 @@ fn finish_sse_json(
         return Ok(serde_json::json!({ "output_text": output_text }));
     }
     if !chat_content.is_empty() {
-        return Ok(serde_json::json!({
-            "choices": [{ "message": { "content": chat_content } }]
-        }));
+        return Ok(synthesize_chat_json(last_json, chat_content));
     }
     last_json.ok_or_else(|| {
         GrokSearchError::Parse(format!("{label} SSE stream ended without JSON data"))
