@@ -12,6 +12,8 @@ pub enum GrokSearchError {
     Timeout(String),
     #[error("provider error: {0}")]
     Provider(String),
+    #[error("oauth error: {0}")]
+    OAuth(String),
     #[error("parse error: {0}")]
     Parse(String),
 }
@@ -30,6 +32,8 @@ impl GrokSearchError {
             GrokSearchError::Timeout(_) => -32002,
             // -32001 (server-defined) upstream / provider failure
             GrokSearchError::Provider(_) => -32001,
+            // -32005 (server-defined) OAuth setup / refresh failure
+            GrokSearchError::OAuth(_) => -32005,
             // -32003 (server-defined) missing config
             GrokSearchError::MissingConfig(_) => -32003,
         }

@@ -5,7 +5,8 @@ use tokio::sync::Mutex;
 use uuid::Uuid;
 
 use crate::cache::SourceCache;
-use crate::config::Config;
+use crate::config::{AuthMode, Config};
+use crate::credentials::{OAuthCredential, StaticApiKeyCredential};
 use crate::error::{GrokSearchError, Result};
 use crate::model::search::{
     ContentBlock, SearchFilters, SearchMessage, SearchRequest, SearchResponse, SearchTool,
@@ -111,14 +112,32 @@ impl SearchService {
 
         let ai: Arc<dyn AiProvider> = match config.transport {
             Transport::Responses => {
-                let grok_key = config
-                    .grok_api_key
-                    .clone()
-                    .ok_or(GrokSearchError::MissingConfig("GROK_SEARCH_API_KEY"))?;
-                Arc::new(GrokResponsesProvider::with_client(
+                let credential: Arc<dyn crate::credentials::CredentialProvider> =
+                    match config.grok_auth_mode {
+                        AuthMode::ApiKey => Arc::new(StaticApiKeyCredential::new(
+                            config
+                                .grok_api_key
+                                .clone()
+                                .ok_or(GrokSearchError::MissingConfig("GROK_SEARCH_API_KEY"))?,
+                        )),
+                        AuthMode::OAuth => {
+                            let auth_path = config
+                                .grok_auth_file
+                                .clone()
+                                .or_else(crate::config::auth_path)
+                                .ok_or_else(|| {
+                                    GrokSearchError::OAuth(
+                                        "oauth_auth_path_unavailable: set GROK_SEARCH_AUTH_FILE"
+                                            .to_string(),
+                                    )
+                                })?;
+                            Arc::new(OAuthCredential::new(http.clone(), auth_path))
+                        }
+                    };
+                Arc::new(GrokResponsesProvider::with_credential_client(
                     http.clone(),
                     config.grok_api_url.clone(),
-                    grok_key,
+                    credential,
                     config.web_search_enabled,
                     config.x_search_enabled,
                 ))
@@ -484,6 +503,16 @@ impl SearchService {
             "grok": {
                 "api_url": ai_api_url,
                 "model": self.default_model,
+                "auth_mode": match self.config.grok_auth_mode {
+                    AuthMode::ApiKey => "api_key",
+                    AuthMode::OAuth => "oauth",
+                },
+                "auth_file": self.config
+                    .grok_auth_file
+                    .clone()
+                    .or_else(crate::config::auth_path)
+                    .map(|path| path.display().to_string())
+                    .unwrap_or_else(|| "unavailable".to_string()),
                 "web_search_enabled": self.config.web_search_enabled,
                 "x_search_enabled": ai_x_search_enabled,
                 "reachable": grok_probe.ok,

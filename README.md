@@ -12,6 +12,7 @@
 
 - 🔎 **Live web search** with cited sources, cached for follow‑up `get_sources` calls.
 - 🔀 **Two transports** — native xAI Responses (`/v1/responses`) **or** any OpenAI‑compatible chat‑completions gateway (`/v1/chat/completions`). Pick by env vars; no flag.
+- 🔐 **Optional Grok OAuth mode** — `login/status/logout` commands store a local xAI OAuth token for Responses auth, so the MCP server can run without `GROK_SEARCH_API_KEY`.
 - 📥 **Tavily fetch / map** for full‑text extraction and link discovery, with **Firecrawl** as automatic fallback.
 - 🐦 **Optional X/Twitter search** via `x_search` (Responses transport only).
 - 🩺 **`doctor`** — connectivity probe + redacted config in one tool call.
@@ -71,13 +72,37 @@ Pick **one** transport group. Both Tavily and Firecrawl keys are shared across t
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `GROK_SEARCH_API_KEY` | — *(required)* | Bearer token for the Grok / xAI gateway. |
+| `GROK_SEARCH_AUTH_MODE` | `api_key` | `api_key` uses `GROK_SEARCH_API_KEY`; `oauth` uses the local token from `grok-search-rs login`. |
+| `GROK_SEARCH_API_KEY` | — *(required in `api_key` mode)* | Bearer token for the Grok / xAI gateway. |
+| `GROK_SEARCH_AUTH_FILE` | `<home>/.config/grok-search-rs/auth.json` | Optional OAuth token file override. |
 | `GROK_SEARCH_URL` | `https://api.x.ai` | Root, `/v1`, or full‑endpoint URL. |
 | `GROK_SEARCH_MODEL` | `grok-4-1-fast-reasoning` | Model name. |
 | `GROK_SEARCH_WEB_SEARCH` | `true` | Offer `web_search` tool to Grok. |
 | `GROK_SEARCH_X_SEARCH` | `false` | Offer `x_search` tool (X/Twitter) to Grok. |
 
 Verified upstreams: **xAI** (`https://api.x.ai`, both tools), **Modelverse** (`https://api.modelverse.cn`, `x_search` depends on relay).
+
+OAuth mode is a single-binary flow:
+
+```bash
+grok-search-rs login
+grok-search-rs status
+grok-search-rs logout
+```
+
+Then configure your MCP client with:
+
+```toml
+[mcp_servers.grok-search-rs]
+command = "grok-search-rs"
+
+[mcp_servers.grok-search-rs.env]
+GROK_SEARCH_AUTH_MODE = "oauth"
+GROK_SEARCH_MODEL = "grok-4.3"
+GROK_SEARCH_WEB_SEARCH = "true"
+```
+
+OAuth mode reuses Hermes' xAI OAuth client id and stores `auth.json` locally. That may violate xAI terms or affect your account; do not share the token file. If xAI changes or blocks that OAuth flow, switch back to `api_key` mode.
 
 ### B. OpenAI‑compatible chat/completions
 
@@ -111,9 +136,10 @@ Notes:
 
 ### Selection rules at startup
 
-1. If `GROK_SEARCH_API_KEY` is set → **Responses** transport.
-2. Else if both `OPENAI_COMPATIBLE_API_URL` and `OPENAI_COMPATIBLE_API_KEY` are set → **ChatCompletions** transport.
-3. Else → server fails with a clear `MissingConfig` error.
+1. If `GROK_SEARCH_AUTH_MODE=oauth` → **Responses** transport with the local OAuth token.
+2. Else if `GROK_SEARCH_API_KEY` is set → **Responses** transport with a static Bearer key.
+3. Else if both `OPENAI_COMPATIBLE_API_URL` and `OPENAI_COMPATIBLE_API_KEY` are set → **ChatCompletions** transport.
+4. Else → server fails with a clear `MissingConfig` error.
 
 ### Global config file
 

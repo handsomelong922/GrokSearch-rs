@@ -12,7 +12,9 @@ The config file is optional; missing files are skipped silently. See the [Config
 
 | Variable | Default | Description |
 |---|---|---|
-| `GROK_SEARCH_API_KEY` | required | Bearer token for the configured Grok-compatible gateway. |
+| `GROK_SEARCH_AUTH_MODE` | `api_key` | `api_key` uses `GROK_SEARCH_API_KEY`; `oauth` uses the local token file created by `grok-search-rs login`. |
+| `GROK_SEARCH_API_KEY` | required in `api_key` mode | Bearer token for the configured Grok-compatible gateway. |
+| `GROK_SEARCH_AUTH_FILE` | `<home>/.config/grok-search-rs/auth.json` | Optional OAuth token file override. |
 | `GROK_SEARCH_URL` | `https://api.x.ai` | Root URL, `/v1` base URL, or endpoint-like URL. The service normalizes it to a `/v1` base. |
 | `GROK_SEARCH_MODEL` | `grok-4-1-fast-reasoning` | Model sent in the Responses payload. |
 | `GROK_SEARCH_WEB_SEARCH` | `true` | Sends Responses `{"type":"web_search"}`. |
@@ -30,6 +32,32 @@ GROK_SEARCH_X_SEARCH=false
 ```
 
 The example above calls `https://api.modelverse.cn/v1/responses`.
+
+### OAuth mode
+
+OAuth mode keeps the normal Responses payload and only changes where the Bearer token comes from. The binary handles login and MCP stdio; it does not start a background HTTP proxy.
+
+```bash
+grok-search-rs login
+grok-search-rs status
+grok-search-rs logout
+```
+
+`login` opens xAI OAuth in a browser, listens once on `http://127.0.0.1:56121/callback`, and writes `access_token`, `refresh_token`, `id_token`, `token_endpoint`, `base_url`, and `last_refresh` to `auth.json`. `status` prints token presence, expiry, and the auth file path without printing the token. `logout` removes the local auth file.
+
+OAuth mode reuses Hermes' xAI OAuth client id. This may violate xAI terms or create account risk, and Windows stores the token as a normal local file. Do not share the token file.
+
+Minimal Codex config:
+
+```toml
+[mcp_servers.grok-search-rs]
+command = "grok-search-rs"
+
+[mcp_servers.grok-search-rs.env]
+GROK_SEARCH_AUTH_MODE = "oauth"
+GROK_SEARCH_MODEL = "grok-4.3"
+GROK_SEARCH_WEB_SEARCH = "true"
+```
 
 ## Tavily
 
@@ -87,6 +115,8 @@ Unknown keys are rejected by the loader — typos surface as parse errors instea
 |---|---|
 | `grok_api_url` | `GROK_SEARCH_URL` |
 | `grok_api_key` | `GROK_SEARCH_API_KEY` |
+| `grok_auth_mode` | `GROK_SEARCH_AUTH_MODE` |
+| `grok_auth_file` | `GROK_SEARCH_AUTH_FILE` |
 | `grok_model` | `GROK_SEARCH_MODEL` |
 | `web_search_enabled` | `GROK_SEARCH_WEB_SEARCH` |
 | `x_search_enabled` | `GROK_SEARCH_X_SEARCH` |
@@ -110,11 +140,20 @@ tavily_api_key = "tvly-..."
 grok_model     = "grok-4-1-fast-reasoning"
 ```
 
+Example — OAuth mode:
+
+```toml
+grok_auth_mode = "oauth"
+grok_model     = "grok-4.3"
+```
+
 Example — full reference:
 
 ```toml
 grok_api_url          = "https://api.x.ai"
 grok_api_key          = "xai-..."
+grok_auth_mode        = "api_key"
+# grok_auth_file      = "C:\\Users\\chen\\.config\\grok-search-rs\\auth.json"
 grok_model            = "grok-4-1-fast-reasoning"
 web_search_enabled    = true
 x_search_enabled      = false

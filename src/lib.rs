@@ -1,9 +1,11 @@
 pub mod adapters;
 pub mod cache;
 pub mod config;
+pub mod credentials;
 pub mod error;
 pub mod logging;
 pub mod mcp;
 pub mod model;
+pub mod oauth;
 pub mod providers;
 pub mod service;

@@ -10,10 +10,18 @@ pub enum Transport {
     ChatCompletions,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AuthMode {
+    ApiKey,
+    OAuth,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Config {
     pub grok_api_url: String,
     pub grok_api_key: Option<String>,
+    pub grok_auth_mode: AuthMode,
+    pub grok_auth_file: Option<PathBuf>,
     pub grok_model: String,
     pub web_search_enabled: bool,
     pub x_search_enabled: bool,
@@ -41,6 +49,8 @@ pub struct Config {
 struct ConfigFile {
     grok_api_url: Option<String>,
     grok_api_key: Option<String>,
+    grok_auth_mode: Option<String>,
+    grok_auth_file: Option<String>,
     grok_model: Option<String>,
     web_search_enabled: Option<bool>,
     x_search_enabled: Option<bool>,
@@ -72,6 +82,8 @@ impl ConfigFile {
         };
         insert("GROK_SEARCH_URL", self.grok_api_url);
         insert("GROK_SEARCH_API_KEY", self.grok_api_key);
+        insert("GROK_SEARCH_AUTH_MODE", self.grok_auth_mode);
+        insert("GROK_SEARCH_AUTH_FILE", self.grok_auth_file);
         insert("GROK_SEARCH_MODEL", self.grok_model);
         insert(
             "GROK_SEARCH_WEB_SEARCH",
@@ -163,6 +175,12 @@ impl Config {
         Self {
             grok_api_url: normalize_v1_base(&get(&map, "GROK_SEARCH_URL", "https://api.x.ai")),
             grok_api_key: map.get("GROK_SEARCH_API_KEY").cloned(),
+            grok_auth_mode: auth_mode_value(&map),
+            grok_auth_file: map
+                .get("GROK_SEARCH_AUTH_FILE")
+                .cloned()
+                .filter(|v| !v.is_empty())
+                .map(PathBuf::from),
             grok_model: get(&map, "GROK_SEARCH_MODEL", "grok-4-1-fast-reasoning"),
             web_search_enabled: bool_value(&map, "GROK_SEARCH_WEB_SEARCH", true),
             x_search_enabled: bool_value(&map, "GROK_SEARCH_X_SEARCH", false),
@@ -203,9 +221,14 @@ impl Config {
 
     pub fn redacted_diagnostics(&self) -> String {
         format!(
-            "grok_api_url={} grok_api_key={} grok_model={} web_search_enabled={} x_search_enabled={} tavily_api_key={} firecrawl_api_key={} default_extra_sources={} fallback_sources={} timeout_seconds={}",
+            "grok_api_url={} grok_api_key={} grok_auth_mode={:?} grok_auth_file={} grok_model={} web_search_enabled={} x_search_enabled={} tavily_api_key={} firecrawl_api_key={} default_extra_sources={} fallback_sources={} timeout_seconds={}",
             self.grok_api_url,
             redact(self.grok_api_key.as_deref()),
+            self.grok_auth_mode,
+            self.grok_auth_file
+                .as_ref()
+                .map(|p| p.display().to_string())
+                .unwrap_or_else(|| "default".to_string()),
             self.grok_model,
             self.web_search_enabled,
             self.x_search_enabled,
@@ -254,6 +277,26 @@ fn resolve_home_dir(env: &HashMap<String, String>) -> Option<PathBuf> {
 pub fn config_path() -> Option<PathBuf> {
     let env: HashMap<String, String> = std::env::vars().collect();
     resolve_config_path(&env)
+}
+
+pub fn auth_path() -> Option<PathBuf> {
+    auth_path_for(std::env::vars())
+}
+
+pub fn auth_path_for<I, K, V>(env_vars: I) -> Option<PathBuf>
+where
+    I: IntoIterator<Item = (K, V)>,
+    K: Into<String>,
+    V: Into<String>,
+{
+    let env: HashMap<String, String> = env_vars
+        .into_iter()
+        .map(|(k, v)| (k.into(), v.into()))
+        .collect();
+    if let Some(explicit) = env.get("GROK_SEARCH_AUTH_FILE").filter(|v| !v.is_empty()) {
+        return Some(PathBuf::from(explicit));
+    }
+    resolve_config_path(&env).map(|path| path.with_file_name("auth.json"))
 }
 
 /// Test-friendly variant of [`config_path`] that takes an explicit env map.
@@ -307,6 +350,8 @@ pub const CONFIG_TEMPLATE: &str = r#"# grok-search-rs global configuration
 
 # ── Required ──────────────────────────────────────────────────
 # grok_api_key   = "xai-..."          # xAI / Grok key   https://x.ai/api
+# grok_auth_mode = "api_key"          # api_key | oauth
+# grok_auth_file = "C:\\Users\\you\\.config\\grok-search-rs\\auth.json"
 # tavily_api_key = "tvly-..."         # Tavily key       https://tavily.com
 
 # ── Common knobs ──────────────────────────────────────────────
@@ -399,6 +444,17 @@ fn bool_literal(value: &str) -> bool {
     matches!(value.to_ascii_lowercase().as_str(), "1" | "true" | "yes")
 }
 
+fn auth_mode_value(map: &HashMap<String, String>) -> AuthMode {
+    match map
+        .get("GROK_SEARCH_AUTH_MODE")
+        .map(|value| value.trim().to_ascii_lowercase())
+        .as_deref()
+    {
+        Some("oauth") => AuthMode::OAuth,
+        _ => AuthMode::ApiKey,
+    }
+}
+
 fn u64_value(map: &HashMap<String, String>, key: &str, default: u64) -> u64 {
     map.get(key)
         .and_then(|value| value.parse::<u64>().ok())
@@ -419,6 +475,9 @@ fn optional_positive_usize(map: &HashMap<String, String>, key: &str) -> Option<u
 }
 
 fn decide_transport(map: &HashMap<String, String>) -> Transport {
+    if auth_mode_value(map) == AuthMode::OAuth {
+        return Transport::Responses;
+    }
     let grok_key_set = map
         .get("GROK_SEARCH_API_KEY")
         .map(|v| !v.is_empty())

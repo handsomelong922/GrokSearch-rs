@@ -1,6 +1,6 @@
 use std::fs;
 
-use grok_search_rs::config::{self, Config, InitOutcome};
+use grok_search_rs::config::{self, AuthMode, Config, InitOutcome, Transport};
 use tempfile::tempdir;
 
 #[test]
@@ -19,6 +19,43 @@ fn config_reads_grok_search_responses_defaults() {
     assert_eq!(cfg.default_extra_sources, 3);
     assert_eq!(cfg.fallback_sources, 5);
     assert_eq!(cfg.timeout.as_secs(), 60);
+    assert_eq!(cfg.grok_auth_mode, AuthMode::ApiKey);
+}
+
+#[test]
+fn config_reads_oauth_auth_mode_from_env() {
+    let cfg = Config::from_env_map([("GROK_SEARCH_AUTH_MODE", "oauth")]);
+
+    assert_eq!(cfg.grok_auth_mode, AuthMode::OAuth);
+    assert_eq!(cfg.transport, Transport::Responses);
+}
+
+#[test]
+fn oauth_transport_wins_over_openai_compatible_config() {
+    let cfg = Config::from_env_map([
+        ("GROK_SEARCH_AUTH_MODE", "oauth"),
+        ("OPENAI_COMPATIBLE_API_URL", "https://example.com/v1"),
+        ("OPENAI_COMPATIBLE_API_KEY", "sk-fake"),
+    ]);
+
+    assert_eq!(cfg.grok_auth_mode, AuthMode::OAuth);
+    assert_eq!(cfg.transport, Transport::Responses);
+}
+
+#[test]
+fn config_reads_auth_file_override() {
+    let cfg = Config::from_env_map([
+        ("GROK_SEARCH_AUTH_MODE", "oauth"),
+        ("GROK_SEARCH_AUTH_FILE", "C:\\Users\\chen\\.config\\grok-search-rs\\auth.json"),
+    ]);
+
+    assert_eq!(cfg.grok_auth_mode, AuthMode::OAuth);
+    assert_eq!(
+        cfg.grok_auth_file,
+        Some(std::path::PathBuf::from(
+            "C:\\Users\\chen\\.config\\grok-search-rs\\auth.json"
+        ))
+    );
 }
 
 #[test]
@@ -197,6 +234,8 @@ fn config_file_supports_all_documented_keys() {
         r#"
 grok_api_url          = "https://api.modelverse.cn"
 grok_api_key          = "xai-full"
+grok_auth_mode        = "oauth"
+grok_auth_file        = 'C:\Users\chen\.config\grok-search-rs\auth.json'
 grok_model            = "grok-9000"
 web_search_enabled    = false
 x_search_enabled      = true
@@ -219,6 +258,13 @@ timeout_seconds       = 30
 
     assert_eq!(cfg.grok_api_url, "https://api.modelverse.cn/v1");
     assert_eq!(cfg.grok_api_key.as_deref(), Some("xai-full"));
+    assert_eq!(cfg.grok_auth_mode, AuthMode::OAuth);
+    assert_eq!(
+        cfg.grok_auth_file,
+        Some(std::path::PathBuf::from(
+            "C:\\Users\\chen\\.config\\grok-search-rs\\auth.json"
+        ))
+    );
     assert_eq!(cfg.grok_model, "grok-9000");
     assert!(!cfg.web_search_enabled);
     assert!(cfg.x_search_enabled);
@@ -341,6 +387,38 @@ fn config_path_prefers_home_over_userprofile_when_both_set() {
         "HOME should win, got {}",
         path.display()
     );
+}
+
+#[test]
+fn auth_path_uses_config_sibling_by_default() {
+    let path = config::auth_path_for([("HOME", "/home/alice")])
+        .expect("HOME must produce auth path");
+    let expected = std::path::PathBuf::from("/home/alice")
+        .join(".config")
+        .join("grok-search-rs")
+        .join("auth.json");
+    assert_eq!(path, expected);
+}
+
+#[test]
+fn auth_path_falls_back_to_userprofile_when_home_missing() {
+    let path = config::auth_path_for([("USERPROFILE", "C:\\Users\\chen")])
+        .expect("USERPROFILE must produce auth path");
+    let expected = std::path::PathBuf::from("C:\\Users\\chen")
+        .join(".config")
+        .join("grok-search-rs")
+        .join("auth.json");
+    assert_eq!(path, expected);
+}
+
+#[test]
+fn auth_path_honors_explicit_override() {
+    let path = config::auth_path_for([
+        ("GROK_SEARCH_AUTH_FILE", "/tmp/auth.json"),
+        ("HOME", "/home/ignored"),
+    ])
+    .expect("explicit override must resolve");
+    assert_eq!(path, std::path::PathBuf::from("/tmp/auth.json"));
 }
 
 #[test]

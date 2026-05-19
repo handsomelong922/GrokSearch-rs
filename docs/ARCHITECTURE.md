@@ -5,7 +5,8 @@ GrokSearch-rs is a Rust MCP server that keeps the original GrokSearch product bo
 ```text
 MCP client
   -> src/mcp.rs
-  -> src/service.rs
+      -> src/service.rs
+      -> credential provider: static API key or xAI OAuth token
       -> Grok Responses provider: /v1/responses with web_search and optional x_search
       -> Tavily provider: search / extract / map
       -> Firecrawl provider: search / scrape fallback
@@ -30,6 +31,13 @@ The service builds an internal search request and sends one Responses payload:
 | Grok Responses | `{GROK_SEARCH_URL normalized to /v1}/responses` | `{"type":"web_search"}` plus optional `{"type":"x_search"}` |
 
 The provider returns normalized assistant content and normalized `Source` values. Empty content or missing native sources are treated as unverifiable for `web_search`.
+
+Authentication is separated from the Responses provider:
+
+- `api_key` mode returns the configured `GROK_SEARCH_API_KEY` as a static Bearer token.
+- `oauth` mode reads the local auth file, refreshes the access token when it is near expiry, and returns the fresh Bearer token for the same `/v1/responses` request body.
+
+OAuth login is not a service boundary. `grok-search-rs login` temporarily listens on `127.0.0.1:56121` for the browser callback, stores the token file, then exits. Normal MCP operation remains stdio only.
 
 ## Source Provenance
 
