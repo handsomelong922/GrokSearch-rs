@@ -8,6 +8,7 @@ use crate::error::{GrokSearchError, Result};
 pub mod arxiv;
 pub mod github;
 pub mod stackexchange;
+pub mod wikipedia;
 
 /// Sentinel `Err` value returned by [`resolve_content`] when no specialist
 /// extractor matched the URL. The service layer treats this as "go generic
@@ -108,6 +109,7 @@ impl SourceRouter {
             }),
             Box::new(stackexchange::StackExchangeExtractor),
             Box::new(arxiv::ArxivExtractor),
+            Box::new(wikipedia::WikipediaExtractor),
         ])
     }
 

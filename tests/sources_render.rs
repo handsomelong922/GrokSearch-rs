@@ -3,6 +3,7 @@ use grok_search_rs::sources::github::{
     render as gh_render, GithubIssueExtractor, GithubPrExtractor, GithubRaw,
 };
 use grok_search_rs::sources::stackexchange::{render as se_render, SeRaw, StackExchangeExtractor};
+use grok_search_rs::sources::wikipedia::{render as wiki_render, WikiRaw, WikipediaExtractor};
 use grok_search_rs::sources::{SourceCaps, SourceExtractor};
 use url::Url;
 
@@ -186,4 +187,60 @@ fn arxiv_matcher_negative_non_paper_paths() {
     assert!(!ax.matches(&m("https://arxiv.org/")));
     assert!(!ax.matches(&m("https://arxiv.org/search/")));
     assert!(!ax.matches(&m("https://export.arxiv.org/api/query?id_list=1706.03762")));
+}
+
+#[test]
+fn wiki_render_shows_title_and_body() {
+    let raw = WikiRaw {
+        title: "Rust (programming language)".into(),
+        extract: "Rust achieves memory safety without a garbage collector.".into(),
+        lang: "en".into(),
+    };
+    let out = wiki_render(&raw, &SourceCaps::default());
+    assert!(out.contains("# Rust (programming language)"));
+    assert!(out.contains("memory safety"));
+}
+
+#[test]
+fn wiki_render_produces_clean_plaintext() {
+    let raw = WikiRaw {
+        title: "Rust".into(),
+        extract: "Plain text, no markup.".into(),
+        lang: "en".into(),
+    };
+    let out = wiki_render(&raw, &SourceCaps::default());
+    assert!(
+        !out.contains('<'),
+        "render must not contain HTML tags: {out}"
+    );
+}
+
+#[test]
+fn wiki_matcher_positive_article_urls() {
+    let w = WikipediaExtractor;
+    let m = |u: &str| Url::parse(u).unwrap();
+    assert!(w.matches(&m(
+        "https://en.wikipedia.org/wiki/Rust_(programming_language)"
+    )));
+    assert!(w.matches(&m("https://fr.wikipedia.org/wiki/Rust_(langage)")));
+}
+
+#[test]
+fn wiki_matcher_excludes_all_non_article_namespaces() {
+    let w = WikipediaExtractor;
+    let m = |u: &str| Url::parse(u).unwrap();
+    for neg in [
+        "https://en.wikipedia.org/wiki/Special:Search",
+        "https://en.wikipedia.org/wiki/Talk:Rust",
+        "https://en.wikipedia.org/wiki/Category:Programming_languages",
+        "https://en.wikipedia.org/wiki/Help:Contents",
+        "https://en.wikipedia.org/wiki/User:Alice",
+        "https://en.wikipedia.org/wiki/File:Rust_logo.png",
+        "https://en.wikipedia.org/wiki/Template:Infobox",
+        "https://en.wikipedia.org/wiki/Wikipedia:About",
+        "https://en.wikipedia.org/wiki/Draft:Article",
+        "https://en.wikipedia.org/wiki/Portal:Science",
+    ] {
+        assert!(!w.matches(&m(neg)), "should exclude {neg}");
+    }
 }
