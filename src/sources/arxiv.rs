@@ -76,7 +76,7 @@ impl ArxivExtractor {
                 Ok(Event::Eof) => break,
                 Ok(Event::Start(e)) => match e.name().as_ref() {
                     b"entry" => in_entry = true,
-                    b"author" => in_author = true,
+                    b"author" if in_entry => in_author = true,
                     b"title" if in_entry => {
                         field = Field::Title;
                         buf.clear();
@@ -127,7 +127,11 @@ impl ArxivExtractor {
                         field = Field::None;
                     }
                     b"author" => in_author = false,
-                    b"entry" => in_entry = false,
+                    b"entry" => {
+                        in_entry = false;
+                        in_author = false;
+                        field = Field::None;
+                    }
                     _ => {}
                 },
                 Err(e) => return Err(parse_err(e)),

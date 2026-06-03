@@ -167,6 +167,7 @@ fn arxiv_render_shows_title_and_pdf_link() {
     let out = arxiv_render(&raw, &SourceCaps::default());
     assert!(out.contains("# Attention Is All You Need"));
     assert!(out.contains("[PDF]"));
+    assert!(out.contains("[Abstract]"));
 }
 
 #[test]
