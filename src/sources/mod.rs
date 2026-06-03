@@ -5,6 +5,8 @@ use url::Url;
 
 use crate::error::{GrokSearchError, Result};
 
+pub mod github;
+
 /// Sentinel `Err` value returned by [`resolve_content`] when no specialist
 /// extractor matched the URL. The service layer treats this as "go generic
 /// silently" — no `fallback_reason` is surfaced (per decision D-01), because no
@@ -94,8 +96,15 @@ impl SourceRouter {
     /// Production constructor: builds the ordered specialist list from runtime
     /// config. Phase 2 source slices append their extractor here in a serial
     /// chain (GitHub → StackExchange → arXiv → Wikipedia). Empty for now.
-    pub fn from_config(_config: &crate::config::Config) -> Self {
-        Self::with_extractors(vec![])
+    pub fn from_config(config: &crate::config::Config) -> Self {
+        Self::with_extractors(vec![
+            Box::new(github::GithubIssueExtractor {
+                token: config.github_token.clone(),
+            }),
+            Box::new(github::GithubPrExtractor {
+                token: config.github_token.clone(),
+            }),
+        ])
     }
 
     /// First extractor whose `matches(url)` is true, or `None`.
