@@ -40,7 +40,9 @@ fn base_site_param(host: &str) -> String {
         "serverfault.com" => "serverfault".to_string(),
         "superuser.com" => "superuser".to_string(),
         "askubuntu.com" => "askubuntu".to_string(),
-        "mathoverflow.net" => "mathoverflow".to_string(),
+        // MathOverflow is the exception: its api_site_parameter is the full
+        // domain, not a stripped subdomain.
+        "mathoverflow.net" => "mathoverflow.net".to_string(),
         other => other
             .strip_suffix(".stackexchange.com")
             .unwrap_or(other)
@@ -260,6 +262,12 @@ mod tests {
     fn site_from_host_strips_regular_stackexchange_subdomain() {
         assert_eq!(site_from_host("math.stackexchange.com"), "math");
         assert_eq!(site_from_host("stackoverflow.com"), "stackoverflow");
+    }
+
+    #[test]
+    fn site_from_host_keeps_mathoverflow_full_domain() {
+        // MathOverflow's api_site_parameter is the full domain "mathoverflow.net".
+        assert_eq!(site_from_host("mathoverflow.net"), "mathoverflow.net");
     }
 
     #[test]

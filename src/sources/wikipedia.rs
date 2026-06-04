@@ -57,15 +57,16 @@ fn build_api_url(lang: &str, title_param: &str) -> String {
         .append_pair("action", "query")
         .append_pair("prop", "extracts")
         .append_pair("explaintext", "true")
-        .append_pair("exintro", "false")
+        // NB: `exintro` is a MediaWiki boolean — present means true regardless of
+        // value, so it is OMITTED here to fetch the full article, not the lead.
         .append_pair("titles", &title)
         .append_pair("format", "json")
         .append_pair("redirects", "1");
     api.into()
 }
 
-/// D-05: full article body (`exintro=false`) as clean plaintext
-/// (`explaintext=true` strips HTML/nav server-side).
+/// D-05: full article body (no `exintro`, which would limit to the lead) as
+/// clean plaintext (`explaintext=true` strips HTML/nav server-side).
 pub(crate) async fn fetch(client: &Client, url: &Url) -> Result<WikiRaw> {
     let host = url.host_str().unwrap_or("");
     let lang = lang_from_host(host).to_string();
@@ -158,6 +159,15 @@ mod tests {
         let u = build_api_url("en", "AT%26T");
         assert!(u.contains("titles=AT%26T"), "got: {u}");
         assert!(!u.contains("AT%2526T"), "double-encoded: {u}");
+    }
+
+    #[test]
+    fn build_api_url_requests_full_article_not_intro() {
+        // exintro is a MediaWiki boolean: present => true. To get the full body
+        // it must be omitted entirely, not set to "false".
+        let u = build_api_url("en", "Rust");
+        assert!(!u.contains("exintro"), "exintro must be omitted: {u}");
+        assert!(u.contains("explaintext=true"), "got: {u}");
     }
 
     #[test]
