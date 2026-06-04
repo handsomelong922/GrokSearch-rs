@@ -126,6 +126,7 @@ async fn call_tool(service: &SearchService, name: &str, args: Value) -> Result<V
                     .filter(|value| *value > 0),
                 include_domains: parse_string_array(args.get("include_domains")),
                 exclude_domains: parse_string_array(args.get("exclude_domains")),
+                include_content: args.get("include_content").and_then(Value::as_bool),
             };
             let output = service.web_search(input).await?;
             Ok(serde_json::to_value(output)

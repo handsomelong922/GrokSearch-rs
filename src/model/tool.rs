@@ -14,6 +14,7 @@ pub struct WebSearchInput {
     pub include_domains: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub exclude_domains: Vec<String>,
+    pub include_content: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

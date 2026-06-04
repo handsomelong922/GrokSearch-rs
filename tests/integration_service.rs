@@ -15,8 +15,8 @@ use grok_search_rs::service::SearchService;
 async fn full_service_web_search_via_chat_completions() {
     let url = std::env::var("GROK_SEARCH_E2E_CHAT_URL").expect("set GROK_SEARCH_E2E_CHAT_URL");
     let key = std::env::var("GROK_SEARCH_E2E_CHAT_KEY").expect("set GROK_SEARCH_E2E_CHAT_KEY");
-    let model = std::env::var("GROK_SEARCH_E2E_CHAT_MODEL")
-        .unwrap_or_else(|_| "grok-4.3-fast".to_string());
+    let model =
+        std::env::var("GROK_SEARCH_E2E_CHAT_MODEL").unwrap_or_else(|_| "grok-4.3-fast".to_string());
 
     let config = Config::from_env_map([
         ("OPENAI_COMPATIBLE_API_URL", url.as_str()),
@@ -37,12 +37,16 @@ async fn full_service_web_search_via_chat_completions() {
             exclude_domains: vec![],
             extra_sources: None,
             model: None,
+            include_content: None,
         })
         .await
         .expect("web_search");
 
     assert!(!out.content.trim().is_empty(), "content empty");
-    eprintln!("content head: {}", &out.content.chars().take(200).collect::<String>());
+    eprintln!(
+        "content head: {}",
+        &out.content.chars().take(200).collect::<String>()
+    );
     eprintln!("sources_count: {}", out.sources_count);
     eprintln!("session_id: {}", out.session_id);
 }
