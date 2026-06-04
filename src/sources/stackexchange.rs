@@ -114,20 +114,71 @@ fn answers_url(id: &str, site: &str, max_answers: usize) -> String {
     )
 }
 
+/// Decode the small set of HTML entities StackExchange emits inside
+/// `body_markdown`, titles, and display names (`&lt; &gt; &amp; &quot; &apos;`
+/// plus numeric `&#NN;` / `&#xHH;`). SE stores Markdown source with these
+/// encoded, so `c &lt; arraySize` and `Poincar&#233;` would otherwise leak into
+/// the rendered output. Unknown entities (e.g. `&nbsp;`) and bare `&` are left
+/// verbatim so real text is never corrupted. Pure — unit-tested offline.
+fn decode_entities(s: &str) -> String {
+    if !s.contains('&') {
+        return s.to_string();
+    }
+    let mut out = String::with_capacity(s.len());
+    let mut rest = s;
+    while let Some(amp) = rest.find('&') {
+        out.push_str(&rest[..amp]);
+        let tail = &rest[amp..];
+        let decoded = tail.find(';').and_then(|semi| {
+            let ent = &tail[1..semi];
+            let c = match ent {
+                "lt" => Some('<'),
+                "gt" => Some('>'),
+                "amp" => Some('&'),
+                "quot" => Some('"'),
+                "apos" => Some('\''),
+                _ => ent.strip_prefix('#').and_then(|num| {
+                    match num.strip_prefix(['x', 'X']) {
+                        Some(hex) => u32::from_str_radix(hex, 16).ok(),
+                        None => num.parse::<u32>().ok(),
+                    }
+                    .and_then(char::from_u32)
+                }),
+            };
+            c.map(|c| (c, semi))
+        });
+        match decoded {
+            Some((c, semi)) => {
+                out.push(c);
+                rest = &tail[semi + 1..];
+            }
+            // Not a recognized entity: keep the '&' literal, advance past it.
+            None => {
+                out.push('&');
+                rest = &tail[1..];
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
 fn field_str(v: &serde_json::Value, primary: &str, fallback: &str) -> String {
-    v.get(primary)
+    let raw = v
+        .get(primary)
         .or_else(|| v.get(fallback))
         .and_then(|x| x.as_str())
-        .unwrap_or("")
-        .to_string()
+        .unwrap_or("");
+    decode_entities(raw)
 }
 
 fn owner_name(v: &serde_json::Value) -> String {
-    v.get("owner")
+    let raw = v
+        .get("owner")
         .and_then(|o| o.get("display_name"))
         .and_then(|n| n.as_str())
-        .unwrap_or("")
-        .to_string()
+        .unwrap_or("");
+    decode_entities(raw)
 }
 
 /// Map an `/answers` (or embedded `answers`) JSON payload into `SeAnswer`s.
@@ -196,11 +247,7 @@ pub(crate) async fn fetch(client: &Client, url: &Url, max_answers: usize) -> Res
     };
 
     Ok(SeRaw {
-        title: item
-            .get("title")
-            .and_then(|v| v.as_str())
-            .unwrap_or_default()
-            .to_string(),
+        title: decode_entities(item.get("title").and_then(|v| v.as_str()).unwrap_or_default()),
         body: field_str(item, "body_markdown", "body"),
         site,
         answers,
@@ -355,5 +402,32 @@ mod tests {
     fn field_str_prefers_body_markdown_over_html_body() {
         let v = serde_json::json!({ "body_markdown": "*md*", "body": "<p>html</p>" });
         assert_eq!(field_str(&v, "body_markdown", "body"), "*md*");
+    }
+
+    // ISSUE-002: SE body_markdown is entity-encoded; field_str must decode it so
+    // code blocks and prose render correctly.
+    #[test]
+    fn field_str_decodes_html_entities_in_body_markdown() {
+        let v = serde_json::json!({ "body_markdown": "for (c = 0; c &lt; n; ++c) &quot;x&#39;y&quot;" });
+        assert_eq!(
+            field_str(&v, "body_markdown", "body"),
+            "for (c = 0; c < n; ++c) \"x'y\""
+        );
+    }
+
+    #[test]
+    fn decode_entities_handles_named_decimal_and_hex() {
+        assert_eq!(decode_entities("a &lt; b &gt; c &amp; d"), "a < b > c & d");
+        assert_eq!(decode_entities("Poincar&#233;&#39;s"), "Poincaré's");
+        assert_eq!(decode_entities("Poincar&#xE9;"), "Poincaré");
+    }
+
+    #[test]
+    fn decode_entities_leaves_unknown_and_bare_ampersand_intact() {
+        // Unknown named entity and a bare ampersand must survive unchanged so
+        // real text (e.g. "R&D", "&nbsp;") is never corrupted.
+        assert_eq!(decode_entities("R&D and Q&A"), "R&D and Q&A");
+        assert_eq!(decode_entities("a &nbsp; b"), "a &nbsp; b");
+        assert_eq!(decode_entities("no entities here"), "no entities here");
     }
 }
