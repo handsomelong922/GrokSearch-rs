@@ -34,6 +34,17 @@ fn lang_from_host(host: &str) -> &str {
     host.strip_suffix(".wikipedia.org").unwrap_or("en")
 }
 
+/// Whether the `/wiki/<title_param>` suffix names a non-article namespace
+/// (File:, Talk:, Special:, …). The title is percent-decoded first so encoded
+/// colons (`File%3A…`) are still recognized, and the prefix is matched
+/// case-insensitively (MediaWiki namespaces are). Excluded titles are left to
+/// the generic fetch path instead of the article extractor.
+fn is_excluded_namespace(title_param: &str) -> bool {
+    let decoded = percent_decode_str(title_param).decode_utf8_lossy();
+    let ns = decoded.split(':').next().unwrap_or("");
+    EXCLUDED_NS.iter().any(|e| e.eq_ignore_ascii_case(ns))
+}
+
 /// Build the action-API query URL for `title_param` (the raw `/wiki/<...>` path
 /// suffix). The title is percent-decoded then re-encoded as a proper query
 /// value, so titles containing `&`, `=`, `?`, spaces, etc. (e.g. `AT&T`) are not
@@ -118,8 +129,7 @@ impl SourceExtractor for WikipediaExtractor {
         if title.is_empty() {
             return false;
         }
-        let ns = title.split(':').next().unwrap_or("");
-        !EXCLUDED_NS.contains(&ns)
+        !is_excluded_namespace(title)
     }
     fn kind(&self) -> SourceType {
         SourceType::Wikipedia
@@ -148,5 +158,26 @@ mod tests {
         let u = build_api_url("en", "AT%26T");
         assert!(u.contains("titles=AT%26T"), "got: {u}");
         assert!(!u.contains("AT%2526T"), "double-encoded: {u}");
+    }
+
+    #[test]
+    fn excluded_namespace_decodes_encoded_colon() {
+        // %3A is the encoded colon; the namespace check must see it.
+        assert!(is_excluded_namespace("File%3AExample.jpg"));
+        assert!(is_excluded_namespace("Special%3ARandom"));
+        // Raw colon still excluded.
+        assert!(is_excluded_namespace("Talk:Rust"));
+    }
+
+    #[test]
+    fn excluded_namespace_is_case_insensitive() {
+        assert!(is_excluded_namespace("file%3AExample.jpg"));
+        assert!(is_excluded_namespace("template:Foo"));
+    }
+
+    #[test]
+    fn excluded_namespace_allows_real_articles() {
+        assert!(!is_excluded_namespace("Rust_(programming_language)"));
+        assert!(!is_excluded_namespace("AT%26T"));
     }
 }

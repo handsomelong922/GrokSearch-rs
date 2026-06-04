@@ -33,21 +33,33 @@ pub struct SeRaw {
 
 pub struct StackExchangeExtractor;
 
-fn site_from_host(host: &str) -> String {
+/// api_site_parameter for a non-meta host.
+fn base_site_param(host: &str) -> String {
     match host {
         "stackoverflow.com" => "stackoverflow".to_string(),
         "serverfault.com" => "serverfault".to_string(),
         "superuser.com" => "superuser".to_string(),
         "askubuntu.com" => "askubuntu".to_string(),
         "mathoverflow.net" => "mathoverflow".to_string(),
-        // Meta Stack Exchange's api_site_parameter is "meta.stackexchange", not
-        // "meta" — naive suffix stripping would break its per-site API calls.
-        "meta.stackexchange.com" => "meta.stackexchange".to_string(),
         other => other
             .strip_suffix(".stackexchange.com")
             .unwrap_or(other)
             .to_string(),
     }
+}
+
+fn site_from_host(host: &str) -> String {
+    // Meta hosts (central `meta.stackexchange.com` and per-site
+    // `meta.stackoverflow.com`, `meta.serverfault.com`, …) map to the
+    // `meta.<base>` api_site_parameter — naive suffix stripping would yield a
+    // bare `meta` and break the API call.
+    if let Some(base) = host.strip_prefix("meta.") {
+        if base == "stackexchange.com" {
+            return "meta.stackexchange".to_string();
+        }
+        return format!("meta.{}", base_site_param(base));
+    }
+    base_site_param(host)
 }
 
 fn is_se_host(host: &str) -> bool {
@@ -58,7 +70,19 @@ fn is_se_host(host: &str) -> bool {
             | "superuser.com"
             | "askubuntu.com"
             | "mathoverflow.net"
+            | "meta.stackoverflow.com"
+            | "meta.serverfault.com"
+            | "meta.superuser.com"
+            | "meta.askubuntu.com"
     ) || host.ends_with(".stackexchange.com")
+}
+
+/// StackExchange answers page size. Defaults to 30/page; request
+/// `max_answers + 1` (capped at the API's 100) so `render` sees every answer
+/// within the cap and can emit its "more answers" marker. Mirrors the GitHub
+/// comments paging approach.
+fn answers_pagesize(max_answers: usize) -> usize {
+    max_answers.saturating_add(1).min(100)
 }
 
 fn field_str(v: &serde_json::Value, primary: &str, fallback: &str) -> String {
@@ -110,7 +134,7 @@ fn parse_answers(json: &serde_json::Value) -> Vec<SeAnswer> {
         .unwrap_or_default()
 }
 
-pub(crate) async fn fetch(client: &Client, url: &Url) -> Result<SeRaw> {
+pub(crate) async fn fetch(client: &Client, url: &Url, max_answers: usize) -> Result<SeRaw> {
     let host = url.host_str().unwrap_or("");
     let site = site_from_host(host);
     let segs: Vec<&str> = url
@@ -138,7 +162,8 @@ pub(crate) async fn fetch(client: &Client, url: &Url) -> Result<SeRaw> {
     // renderer degrades gracefully when comment lists are empty. Anonymous calls
     // are rate-limited (~300/day); a future key could lift that.
     let a_url = format!(
-        "https://api.stackexchange.com/2.3/questions/{id}/answers?site={site}&filter=withbody&order=desc&sort=votes"
+        "https://api.stackexchange.com/2.3/questions/{id}/answers?site={site}&filter=withbody&order=desc&sort=votes&pagesize={}",
+        answers_pagesize(max_answers)
     );
     let answers = match get_json(client, &a_url, &headers, "stackexchange").await {
         Ok(a_json) => parse_answers(&a_json),
@@ -212,7 +237,7 @@ impl SourceExtractor for StackExchangeExtractor {
         SourceType::Stackexchange
     }
     async fn fetch_render(&self, client: &Client, url: &Url, caps: &SourceCaps) -> Result<String> {
-        let raw = fetch(client, url).await?;
+        let raw = fetch(client, url, caps.max_answers).await?;
         Ok(render(&raw, caps))
     }
 }
@@ -235,5 +260,30 @@ mod tests {
     fn site_from_host_strips_regular_stackexchange_subdomain() {
         assert_eq!(site_from_host("math.stackexchange.com"), "math");
         assert_eq!(site_from_host("stackoverflow.com"), "stackoverflow");
+    }
+
+    #[test]
+    fn site_from_host_maps_per_site_meta_hosts() {
+        // Per-site metas use api_site_parameter "meta.<base>".
+        assert_eq!(
+            site_from_host("meta.stackoverflow.com"),
+            "meta.stackoverflow"
+        );
+        assert_eq!(site_from_host("meta.serverfault.com"), "meta.serverfault");
+        assert_eq!(site_from_host("meta.askubuntu.com"), "meta.askubuntu");
+    }
+
+    #[test]
+    fn is_se_host_accepts_per_site_meta_hosts() {
+        assert!(is_se_host("meta.stackoverflow.com"));
+        assert!(is_se_host("meta.superuser.com"));
+        assert!(is_se_host("meta.stackexchange.com"));
+        assert!(!is_se_host("example.com"));
+    }
+
+    #[test]
+    fn answers_pagesize_requests_one_more_than_cap_capped_at_100() {
+        assert_eq!(answers_pagesize(5), 6);
+        assert_eq!(answers_pagesize(250), 100);
     }
 }
