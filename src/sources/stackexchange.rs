@@ -224,24 +224,33 @@ pub(crate) async fn fetch(client: &Client, url: &Url, max_answers: usize) -> Res
     let id = segs.get(1).copied().unwrap_or_default();
     let headers = [(USER_AGENT, UA)];
 
-    // `/questions/{id}` returns the QUESTION body but never the answers array,
-    // so the question call alone yields zero answers.
+    // The question (`/questions/{id}`) returns the QUESTION body but never the
+    // answers array; answers come from the dedicated, vote-sorted endpoint. The
+    // answers URL depends only on `id`/`site` (from the URL), not on the question
+    // response, so the two GETs have no data dependency and run concurrently —
+    // halving the round-trip latency (mirrors the GitHub PR `tokio::join!` path).
+    //
+    // The question is mandatory (`?`); the answers call is best-effort: a
+    // failed/rate-limited answers fetch still returns the question rather than
+    // failing the whole specialist. NOTE: per-answer comments still need a custom
+    // SE filter (via /filters/create) and remain out of scope; the renderer
+    // degrades gracefully when comment lists are empty. Anonymous calls are
+    // rate-limited (~300/day); a future key could lift that.
     let q_url = question_url(id, &site);
-    let q_json = get_json(client, &q_url, &headers, "stackexchange").await?;
+    let a_url = answers_url(id, &site, max_answers);
+    let (q_res, a_res) = tokio::join!(
+        get_json(client, &q_url, &headers, "stackexchange"),
+        get_json(client, &a_url, &headers, "stackexchange"),
+    );
+
+    let q_json = q_res?;
     let item = q_json
         .get("items")
         .and_then(|i| i.as_array())
         .and_then(|a| a.first())
         .ok_or_else(|| GrokSearchError::Provider("stackexchange: empty items".into()))?;
 
-    // Answers come from the dedicated endpoint, vote-sorted with bodies. This is
-    // best-effort: a failed/rate-limited answers call still returns the question
-    // rather than the whole specialist failing. NOTE: per-answer comments still
-    // need a custom SE filter (via /filters/create) and remain out of scope; the
-    // renderer degrades gracefully when comment lists are empty. Anonymous calls
-    // are rate-limited (~300/day); a future key could lift that.
-    let a_url = answers_url(id, &site, max_answers);
-    let answers = match get_json(client, &a_url, &headers, "stackexchange").await {
+    let answers = match a_res {
         Ok(a_json) => parse_answers(&a_json),
         Err(_) => Vec::new(),
     };
