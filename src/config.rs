@@ -255,7 +255,11 @@ impl Config {
     /// Two-state presence signal for GITHUB_TOKEN. Reports only whether a
     /// token is configured — never the value or any fragment.
     pub fn github_token_status(&self) -> &'static str {
-        if self.github_token.is_some() { "set" } else { "unset" }
+        if self.github_token.is_some() {
+            "set"
+        } else {
+            "unset"
+        }
     }
 
     pub fn redacted_diagnostics(&self) -> String {

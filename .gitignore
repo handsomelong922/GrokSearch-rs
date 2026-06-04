@@ -19,4 +19,5 @@
 
 # Agent planning scratch files
 /docs/superpowers/
+/.planning/
 /GrokSearch-rs-rebuild-plan.md

@@ -1,8 +1,7 @@
 use crate::model::search::{ContentBlock, SearchRequest};
 use serde_json::{json, Value};
 
-const DEFAULT_SYSTEM_HINT: &str =
-    "You may search the web when helpful. \
+const DEFAULT_SYSTEM_HINT: &str = "You may search the web when helpful. \
      When you cite a fact, append the source URL inline so the caller can extract it.";
 
 /// Build an OpenAI-style `/v1/chat/completions` payload from a generic

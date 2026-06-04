@@ -20,8 +20,8 @@ async fn chat_completions_e2e_returns_text_and_sources() {
         .expect("set GROK_SEARCH_E2E_CHAT_URL to run this test");
     let key = std::env::var("GROK_SEARCH_E2E_CHAT_KEY")
         .expect("set GROK_SEARCH_E2E_CHAT_KEY to run this test");
-    let model = std::env::var("GROK_SEARCH_E2E_CHAT_MODEL")
-        .unwrap_or_else(|_| "grok-4.3-fast".to_string());
+    let model =
+        std::env::var("GROK_SEARCH_E2E_CHAT_MODEL").unwrap_or_else(|_| "grok-4.3-fast".to_string());
 
     let provider = OpenAICompatProvider::new(url, key, &model, true, Duration::from_secs(60));
     let req = SearchRequest {

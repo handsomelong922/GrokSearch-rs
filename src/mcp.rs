@@ -384,8 +384,7 @@ mod tests {
             tools
                 .iter()
                 .find(|t| t["name"] == name)
-                .unwrap_or_else(|| panic!("tool {name} missing"))
-                ["description"]
+                .unwrap_or_else(|| panic!("tool {name} missing"))["description"]
                 .as_str()
                 .unwrap_or_else(|| panic!("tool {name} description not a string"))
                 .to_string()
@@ -423,7 +422,13 @@ mod tests {
 
         // get_sources: reuses a prior web_search session, runs no new search.
         let get_sources = desc("get_sources");
-        assert!(get_sources.contains("session_id"), "get_sources: {get_sources}");
-        assert!(get_sources.contains("new search"), "get_sources: {get_sources}");
+        assert!(
+            get_sources.contains("session_id"),
+            "get_sources: {get_sources}"
+        );
+        assert!(
+            get_sources.contains("new search"),
+            "get_sources: {get_sources}"
+        );
     }
 }

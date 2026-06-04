@@ -110,4 +110,3 @@ fn push_nonempty(text_parts: &mut Vec<String>, text: &str) {
         text_parts.push(trimmed.to_string());
     }
 }
-

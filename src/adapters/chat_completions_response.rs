@@ -194,10 +194,10 @@ fn extract_inline_bracket_citations(content: &str, out: &mut Vec<Source>) {
             continue;
         }
         let url_start = 1usize; // skip the '('
-        // Find the first `)` *that closes a well-formed URL*. URLs do not
-        // legitimately contain whitespace or another `[`, so treat those as
-        // bailout signals — otherwise a missing-`)` citation could swallow
-        // the rest of the document into a single bogus URL.
+                                // Find the first `)` *that closes a well-formed URL*. URLs do not
+                                // legitimately contain whitespace or another `[`, so treat those as
+                                // bailout signals — otherwise a missing-`)` citation could swallow
+                                // the rest of the document into a single bogus URL.
         let url_window = &after_brackets[url_start..];
         let mut bail: Option<usize> = None;
         for (i, ch) in url_window.char_indices() {
