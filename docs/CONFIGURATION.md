@@ -85,6 +85,20 @@ GROK_SEARCH_WEB_SEARCH = "true"
 | `GROK_SEARCH_TIMEOUT_SECONDS` | `60` | HTTP timeout for Grok, Tavily, and Firecrawl requests. |
 | `GROK_SEARCH_FETCH_MAX_CHARS` | unset | Default character cap on `web_fetch` content. Overridden per call by `max_chars`. Unset means no truncation. |
 
+## Source extraction
+
+Specialist `web_fetch` extractors (GitHub, StackExchange, arXiv, Wikipedia) and
+`web_search` inline enrichment. The specialists call public APIs directly — no
+Tavily/Firecrawl key required.
+
+| Variable | Default | Description |
+|---|---|---|
+| `GITHUB_TOKEN` | unset | GitHub token for issue/PR fetches. Anonymous works but is capped at ~60 req/hr; a token raises the limit and allows private repos. |
+| `GROK_SEARCH_SOURCE_MAX_ANSWERS` | `5` | StackExchange answers rendered before the "more answers" fold. |
+| `GROK_SEARCH_SOURCE_MAX_COMMENTS` | `30` | GitHub / StackExchange comments rendered before folding. |
+| `GROK_SEARCH_ENRICH_CONCURRENCY` | `3` | Parallel source enrichments when `web_search` is called with `include_content: true`. Clamped to `1..=5`. |
+| `GROK_SEARCH_ENRICH_MAX_CHARS` | `15000` | Character cap per enriched source body. |
+
 ## Config file
 
 Drop a TOML file at `<home>/.config/grok-search-rs/config.toml` (or any path pointed to by `GROK_SEARCH_CONFIG`) to set defaults once and skip the per-client `env` block. Process env still wins, so individual clients can override any field at runtime.
@@ -131,6 +145,11 @@ Unknown keys are rejected by the loader — typos surface as parse errors instea
 | `fetch_max_chars` | `GROK_SEARCH_FETCH_MAX_CHARS` |
 | `cache_size` | `GROK_SEARCH_CACHE_SIZE` |
 | `timeout_seconds` | `GROK_SEARCH_TIMEOUT_SECONDS` |
+| `github_token` | `GITHUB_TOKEN` |
+| `source_max_answers` | `GROK_SEARCH_SOURCE_MAX_ANSWERS` |
+| `source_max_comments` | `GROK_SEARCH_SOURCE_MAX_COMMENTS` |
+| `enrich_concurrency` | `GROK_SEARCH_ENRICH_CONCURRENCY` |
+| `enrich_max_chars` | `GROK_SEARCH_ENRICH_MAX_CHARS` |
 
 Example — minimum useful file:
 

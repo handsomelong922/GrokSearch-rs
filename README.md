@@ -10,7 +10,8 @@
 
 ## Features
 
-- 🔎 **Live web search** with cited sources, cached for follow‑up `get_sources` calls.
+- 🔎 **Live web search** with cited sources, cached for follow‑up `get_sources` calls. Opt‑in `include_content` enriches the top sources with full extracted text in one call.
+- 🧩 **Structured `web_fetch`** — GitHub issues/PRs, StackExchange/MathOverflow, arXiv, and Wikipedia URLs are parsed by specialist extractors into clean Markdown (title, state/labels, accepted‑answer ordering, abstracts, vote‑sorted answers). Anything else falls back to the generic Tavily → Firecrawl chain. Output carries `source_type` and a `fallback_reason` when a specialist was skipped.
 - 🔀 **Two transports** — native xAI Responses (`/v1/responses`) **or** any OpenAI‑compatible chat‑completions gateway (`/v1/chat/completions`). Pick by env vars; no flag.
 - 🔐 **Optional Grok OAuth mode** — `login/status/logout` commands store a local xAI OAuth token for Responses auth, so the MCP server can run without `GROK_SEARCH_API_KEY`.
 - 📥 **Tavily fetch / map** for full‑text extraction and link discovery, with **Firecrawl** as automatic fallback.
@@ -156,6 +157,20 @@ Notes:
 | `GROK_SEARCH_TIMEOUT_SECONDS` | `60` | HTTP timeout for all upstreams. |
 | `GROK_SEARCH_FETCH_MAX_CHARS` | unset | Default char cap on `web_fetch`. |
 
+### Source extraction (`web_fetch` specialists / `web_search` enrichment)
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `GITHUB_TOKEN` | unset | Authenticates GitHub issue/PR fetches (higher API rate limit; private repos). Specialist works unauthenticated but is rate‑limited. |
+| `GROK_SEARCH_SOURCE_MAX_ANSWERS` | `5` | StackExchange answers rendered before folding. |
+| `GROK_SEARCH_SOURCE_MAX_COMMENTS` | `30` | GitHub / StackExchange comments rendered before folding. |
+| `GROK_SEARCH_ENRICH_CONCURRENCY` | `3` | Parallel source enrichments for `web_search` `include_content` (clamped 1..5). |
+| `GROK_SEARCH_ENRICH_MAX_CHARS` | `15000` | Char cap per enriched source body. |
+
+These specialists need **no Tavily/Firecrawl key** — they hit the public GitHub,
+StackExchange, arXiv, and Wikipedia APIs directly. Tavily/Firecrawl are only used
+for the generic fallback path.
+
 ### Selection rules at startup
 
 1. If `GROK_SEARCH_AUTH_MODE=oauth` → **Responses** transport with the local OAuth token.
@@ -181,9 +196,9 @@ Tired of duplicating `env` blocks across clients? Run `grok-search-rs --init` on
 
 | Tool | When to call it |
 |---|---|
-| `web_search` | Sourced summary for a topic. Sources cached for follow‑up. |
+| `web_search` | Sourced summary for a topic. Sources cached for follow‑up. Set `include_content: true` to inline full source text. |
 | `get_sources` | Re‑fetch sources of a previous `web_search` by `session_id`. |
-| `web_fetch` | Page content (Tavily → Firecrawl fallback). |
+| `web_fetch` | Page content as clean Markdown. Specialist extractors for GitHub / StackExchange / arXiv / Wikipedia; generic Tavily → Firecrawl fallback otherwise. Returns `source_type` + `fallback_reason`. |
 | `web_map` | Discover URLs on a domain via Tavily Map. |
 | `doctor` | Live connectivity probe + redacted config. Run first when something looks off. |
 

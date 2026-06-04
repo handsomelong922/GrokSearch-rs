@@ -4,6 +4,65 @@ All notable changes to GrokSearch-rs are documented here.
 
 ## Unreleased
 
+## 0.1.14 - 2026-06-05
+
+### Added
+
+- **Source extraction pipeline for `web_fetch`.** GitHub issues/PRs,
+  StackExchange/MathOverflow questions, arXiv abstracts, and Wikipedia articles
+  now route through specialist extractors that return clean, structured Markdown
+  (titles, state/labels, accepted-answer ordering, abstracts, vote-sorted
+  answers) instead of a generic page scrape. Non-matching URLs fall back to the
+  existing Tavily → Firecrawl chain. `web_fetch` output gains two fields:
+  `source_type` (`github_issue` | `github_pull` | `stackexchange` | `arxiv` |
+  `wikipedia` | `generic`) and `fallback_reason` (set only when a matched
+  specialist failed and the generic path was used).
+- **`web_search` 内联富化(opt-in `include_content`)。** 开启后,对返回的 top
+  sources 复用同一套提取管道补全正文,受 `enrich_concurrency` 与全局 deadline
+  约束,保持"每次 web_search 仅一次源 provider 调用"契约不变。`Source` 新增
+  `content` 字段(`skip_serializing_if` 缺省不输出)。
+- **新配置项:** `GROK_SEARCH_SOURCE_MAX_ANSWERS` / `GROK_SEARCH_SOURCE_MAX_COMMENTS`
+  (StackExchange/GitHub 折叠上限)、`GITHUB_TOKEN`(鉴权抓取,提升 GitHub API
+  限额)、`GROK_SEARCH_ENRICH_CONCURRENCY`(并发富化,clamp 1..5)、
+  `GROK_SEARCH_ENRICH_MAX_CHARS`。
+- `doctor` 与 `redacted_diagnostics` 报告 `github_token` 的 `set | unset` 状态。
+
+### Fixed
+
+- **StackExchange / MathOverflow `web_fetch` 返回原始 HTML 而非 Markdown。** 提取器
+  优先读 `body_markdown`,但 API 用 `filter=withbody` 调用,只会返回渲染后的 HTML
+  `body`,markdown 分支从未触发。改用确定性自定义 filter(`base=withbody` +
+  `question/answer.body_markdown`),`<p>` / `<pre><code>` 结构性 HTML 消除。
+- **StackExchange `body_markdown` 携带 HTML 实体**(`&lt;` `&gt;` `&quot;`
+  `&#39;` `&#233;`),污染代码块(`c &lt; arraySize`)与正文(`Poincar&#233;`)。
+  新增纯函数 `decode_entities`(named `lt/gt/amp/quot/apos` + 十进制/十六进制
+  数值引用),在 body / title / 作者名处解码;未知实体与裸 `&` 原样保留。
+- hand-written `Config` `Debug` 实现对密钥脱敏。
+
+### Performance
+
+- **StackExchange 的 question 与 answers 两个端点并发抓取(`tokio::join!`)。**
+  二者无数据依赖(answers URL 仅由 `id`/`site` 构造),改并发后实测
+  StackExchange 614ms → 369ms(−40%)、MathOverflow 578ms → 294ms(−49%);
+  question 仍强制、answers 仍 best-effort,行为不变。
+
+### Internal
+
+- 新增 `sources` 模块:`SourceExtractor` trait、`SourceRouter`(有序首匹配)、
+  统一入口 `resolve_content`。
+- 新增依赖:`quick-xml`(arXiv Atom 解析,不解析 DTD/外部实体,无 XXE 风险)、
+  `percent-encoding`(Wikipedia 标题安全编码);`tokio` 启用 `time` feature
+  支撑富化 deadline。
+- 五个提取器均带离线 fixture 单测;SE 端点 URL 构造抽为纯函数并钉死
+  `body_markdown` filter,防止 HTML 回归。
+
+### Notes
+
+- 部分 StackExchange 答案的 `body_markdown` 含作者手写的内联 HTML(`<a>`、
+  `<br>`、`<blockquote>` 等)——SE markdown 语法本就允许,按忠实原文保留。
+- 0.1.12 / 0.1.13(Grok OAuth 登录模式、SSE 帧解析加固)此前已发布 tag 但未在本
+  文档登记;此条目不追溯补录。
+
 ## 0.1.11 - 2026-05-16
 
 ### Added
