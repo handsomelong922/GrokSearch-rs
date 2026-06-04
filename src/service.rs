@@ -669,7 +669,7 @@ impl SearchService {
             "fallback_sources": self.config.fallback_sources,
             "cache_size": self.config.cache_size,
             "timeout_seconds": self.config.timeout.as_secs(),
-            "github_token": if self.config.github_token.is_some() { "set" } else { "unset" },
+            "github_token": self.config.github_token_status(),
             "redacted": self.config.redacted_diagnostics()
         })
     }

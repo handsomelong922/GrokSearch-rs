@@ -252,6 +252,12 @@ impl Config {
         }
     }
 
+    /// Two-state presence signal for GITHUB_TOKEN. Reports only whether a
+    /// token is configured — never the value or any fragment.
+    pub fn github_token_status(&self) -> &'static str {
+        if self.github_token.is_some() { "set" } else { "unset" }
+    }
+
     pub fn redacted_diagnostics(&self) -> String {
         format!(
             "grok_api_url={} grok_api_key={} grok_auth_mode={:?} grok_auth_file={} grok_model={} web_search_enabled={} x_search_enabled={} tavily_api_key={} firecrawl_api_key={} default_extra_sources={} fallback_sources={} timeout_seconds={} github_token={}",
@@ -270,7 +276,7 @@ impl Config {
             self.default_extra_sources,
             self.fallback_sources,
             self.timeout.as_secs(),
-            if self.github_token.is_some() { "set" } else { "unset" }
+            self.github_token_status()
         )
     }
 }
