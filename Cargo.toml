@@ -33,6 +33,7 @@ base64 = "0.22"
 getrandom = "0.3"
 ring = "0.17"
 url = "2"
+percent-encoding = "2"
 quick-xml = { version = "0.37", default-features = false, features = ["encoding"] }
 
 [dev-dependencies]

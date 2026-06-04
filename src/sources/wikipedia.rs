@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use percent_encoding::percent_decode_str;
 use reqwest::header::USER_AGENT;
 use reqwest::Client;
 use url::Url;
@@ -33,15 +34,32 @@ fn lang_from_host(host: &str) -> &str {
     host.strip_suffix(".wikipedia.org").unwrap_or("en")
 }
 
+/// Build the action-API query URL for `title_param` (the raw `/wiki/<...>` path
+/// suffix). The title is percent-decoded then re-encoded as a proper query
+/// value, so titles containing `&`, `=`, `?`, spaces, etc. (e.g. `AT&T`) are not
+/// spliced raw into the query string. Pure (no I/O) so it can be unit-tested.
+fn build_api_url(lang: &str, title_param: &str) -> String {
+    let title = percent_decode_str(title_param).decode_utf8_lossy();
+    let mut api = Url::parse(&format!("https://{lang}.wikipedia.org/w/api.php"))
+        .expect("wikipedia api base is a valid URL");
+    api.query_pairs_mut()
+        .append_pair("action", "query")
+        .append_pair("prop", "extracts")
+        .append_pair("explaintext", "true")
+        .append_pair("exintro", "false")
+        .append_pair("titles", &title)
+        .append_pair("format", "json")
+        .append_pair("redirects", "1");
+    api.into()
+}
+
 /// D-05: full article body (`exintro=false`) as clean plaintext
 /// (`explaintext=true` strips HTML/nav server-side).
 pub(crate) async fn fetch(client: &Client, url: &Url) -> Result<WikiRaw> {
     let host = url.host_str().unwrap_or("");
     let lang = lang_from_host(host).to_string();
     let title_param = &url.path()["/wiki/".len()..];
-    let api_url = format!(
-        "https://{lang}.wikipedia.org/w/api.php?action=query&prop=extracts&explaintext=true&exintro=false&titles={title_param}&format=json&redirects=1"
-    );
+    let api_url = build_api_url(&lang, title_param);
     let headers = [(USER_AGENT, UA)];
     let json = get_json(client, &api_url, &headers, "wikipedia").await?;
     parse_page(&json, &lang)
@@ -109,5 +127,26 @@ impl SourceExtractor for WikipediaExtractor {
     async fn fetch_render(&self, client: &Client, url: &Url, caps: &SourceCaps) -> Result<String> {
         let raw = fetch(client, url).await?;
         Ok(render(&raw, caps))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn build_api_url_encodes_query_delimiters_in_title() {
+        // A raw `&` in the title must not split into a separate query param.
+        let u = build_api_url("en", "AT&T");
+        assert!(u.contains("titles=AT%26T"), "got: {u}");
+        assert!(!u.contains("titles=AT&T"), "raw ampersand leaked: {u}");
+    }
+
+    #[test]
+    fn build_api_url_does_not_double_encode_preencoded_title() {
+        // Already percent-encoded path slice decodes once, re-encodes once.
+        let u = build_api_url("en", "AT%26T");
+        assert!(u.contains("titles=AT%26T"), "got: {u}");
+        assert!(!u.contains("AT%2526T"), "double-encoded: {u}");
     }
 }

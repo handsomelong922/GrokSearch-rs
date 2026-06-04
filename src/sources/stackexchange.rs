@@ -40,6 +40,9 @@ fn site_from_host(host: &str) -> String {
         "superuser.com" => "superuser".to_string(),
         "askubuntu.com" => "askubuntu".to_string(),
         "mathoverflow.net" => "mathoverflow".to_string(),
+        // Meta Stack Exchange's api_site_parameter is "meta.stackexchange", not
+        // "meta" — naive suffix stripping would break its per-site API calls.
+        "meta.stackexchange.com" => "meta.stackexchange".to_string(),
         other => other
             .strip_suffix(".stackexchange.com")
             .unwrap_or(other)
@@ -211,5 +214,26 @@ impl SourceExtractor for StackExchangeExtractor {
     async fn fetch_render(&self, client: &Client, url: &Url, caps: &SourceCaps) -> Result<String> {
         let raw = fetch(client, url).await?;
         Ok(render(&raw, caps))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn site_from_host_preserves_meta_stackexchange() {
+        // Meta Stack Exchange's api_site_parameter is "meta.stackexchange",
+        // not "meta" — stripping the suffix would break the specialist path.
+        assert_eq!(
+            site_from_host("meta.stackexchange.com"),
+            "meta.stackexchange"
+        );
+    }
+
+    #[test]
+    fn site_from_host_strips_regular_stackexchange_subdomain() {
+        assert_eq!(site_from_host("math.stackexchange.com"), "math");
+        assert_eq!(site_from_host("stackoverflow.com"), "stackoverflow");
     }
 }
