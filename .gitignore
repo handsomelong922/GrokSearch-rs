@@ -21,3 +21,11 @@
 /docs/superpowers/
 /.planning/
 /GrokSearch-rs-rebuild-plan.md
+/docs/promotion-linuxdo.md
+
+# gstack / QA tooling artifacts
+/.gstack/
+
+# Stray build/output dumps
+/rust_out
+/stdin
