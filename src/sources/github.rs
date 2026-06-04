@@ -46,11 +46,25 @@ fn matches_github(url: &Url, segment_kind: &str) -> bool {
     segs.len() == 4 && segs[2] == segment_kind && segs[3].parse::<u64>().is_ok()
 }
 
+/// Build the issue-comments URL. `/issues/{n}/comments` defaults to 30 results
+/// per page, which silently drops later comments and prevents the renderer's
+/// "more comments" fold from ever firing. Request `max_comments + 1` so the
+/// renderer can both show `max_comments` and detect there are more. GitHub caps
+/// `per_page` at 100; callers needing more than that would require true page
+/// iteration (out of scope — `source_max_comments` defaults to 30).
+fn comments_url(owner: &str, repo: &str, number: &str, max_comments: usize) -> String {
+    let per_page = max_comments.saturating_add(1).min(100);
+    format!(
+        "https://api.github.com/repos/{owner}/{repo}/issues/{number}/comments?per_page={per_page}"
+    )
+}
+
 pub(crate) async fn fetch(
     client: &Client,
     url: &Url,
     token: Option<&str>,
     is_pr: bool,
+    max_comments: usize,
 ) -> Result<GithubRaw> {
     let segs: Vec<String> = url
         .path_segments()
@@ -74,8 +88,7 @@ pub(crate) async fn fetch(
     } else {
         format!("https://api.github.com/repos/{owner}/{repo}/issues/{number}")
     };
-    let comments_url =
-        format!("https://api.github.com/repos/{owner}/{repo}/issues/{number}/comments");
+    let comments_url = comments_url(owner, repo, number, max_comments);
 
     let (main_res, comments_res) = tokio::join!(
         get_json(client, &main_url, &headers, "github"),
@@ -170,7 +183,7 @@ impl SourceExtractor for GithubIssueExtractor {
         SourceType::GithubIssue
     }
     async fn fetch_render(&self, client: &Client, url: &Url, caps: &SourceCaps) -> Result<String> {
-        let raw = fetch(client, url, self.token.as_deref(), false).await?;
+        let raw = fetch(client, url, self.token.as_deref(), false, caps.max_comments).await?;
         Ok(render(&raw, caps))
     }
 }
@@ -184,7 +197,28 @@ impl SourceExtractor for GithubPrExtractor {
         SourceType::GithubPull
     }
     async fn fetch_render(&self, client: &Client, url: &Url, caps: &SourceCaps) -> Result<String> {
-        let raw = fetch(client, url, self.token.as_deref(), true).await?;
+        let raw = fetch(client, url, self.token.as_deref(), true, caps.max_comments).await?;
         Ok(render(&raw, caps))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn comments_url_requests_one_more_than_cap() {
+        // +1 over max_comments lets render() detect "more comments" and fold.
+        let u = comments_url("o", "r", "5", 30);
+        assert_eq!(
+            u,
+            "https://api.github.com/repos/o/r/issues/5/comments?per_page=31"
+        );
+    }
+
+    #[test]
+    fn comments_url_clamps_per_page_to_github_max() {
+        let u = comments_url("o", "r", "5", 250);
+        assert!(u.ends_with("?per_page=100"), "got: {u}");
     }
 }
