@@ -4,6 +4,8 @@ All notable changes to GrokSearch-rs are documented here.
 
 ## Unreleased
 
+## 0.1.15 - 2026-06-08
+
 ### Changed
 
 - **`web_search` 降级原因细分。** Grok 调用失败时 `fallback_reason` 不再一律
