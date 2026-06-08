@@ -137,6 +137,68 @@ async fn web_search_uses_env_default_extra_sources_after_grok_success() {
         .any(|source| source.provider == "tavily_enrichment"));
 }
 
+struct TimeoutAiProvider;
+
+#[async_trait]
+impl AiProvider for TimeoutAiProvider {
+    async fn search(&self, _request: &SearchRequest) -> Result<SearchResponse> {
+        Err(GrokSearchError::Timeout("upstream timed out".to_string()))
+    }
+}
+
+struct ProviderErrAiProvider;
+
+#[async_trait]
+impl AiProvider for ProviderErrAiProvider {
+    async fn search(&self, _request: &SearchRequest) -> Result<SearchResponse> {
+        Err(GrokSearchError::Provider("HTTP 500".to_string()))
+    }
+}
+
+// A failing Grok call surfaces the specific error kind as fallback_reason
+// (timeout vs the legacy generic provider error), so degraded responses are
+// diagnosable rather than collapsed into one catch-all code.
+#[tokio::test]
+async fn web_search_fallback_reason_reflects_grok_error_kind() {
+    let timeout_service = SearchService::fake_custom(
+        Some(Arc::new(TimeoutAiProvider)),
+        Arc::new(CountingSourceProvider::default()),
+        None,
+        [] as [(&str, &str); 0],
+    );
+    let timeout_output = timeout_service
+        .web_search(WebSearchInput {
+            query: "anything".to_string(),
+            ..Default::default()
+        })
+        .await
+        .expect("fallback output");
+    assert!(timeout_output.fallback_used);
+    assert_eq!(
+        timeout_output.fallback_reason,
+        Some("grok_timeout".to_string())
+    );
+
+    let provider_service = SearchService::fake_custom(
+        Some(Arc::new(ProviderErrAiProvider)),
+        Arc::new(CountingSourceProvider::default()),
+        None,
+        [] as [(&str, &str); 0],
+    );
+    let provider_output = provider_service
+        .web_search(WebSearchInput {
+            query: "anything".to_string(),
+            ..Default::default()
+        })
+        .await
+        .expect("fallback output");
+    assert!(provider_output.fallback_used);
+    assert_eq!(
+        provider_output.fallback_reason,
+        Some("grok_provider_error".to_string())
+    );
+}
+
 #[tokio::test]
 async fn web_search_falls_back_to_tavily_when_grok_has_no_sources() {
     let source_provider = CountingSourceProvider::default();

@@ -4,6 +4,13 @@ All notable changes to GrokSearch-rs are documented here.
 
 ## Unreleased
 
+### Changed
+
+- **`web_search` 降级原因细分。** Grok 调用失败时 `fallback_reason` 不再一律
+  归为 `grok_provider_error`,而是按错误类型区分:`grok_timeout`(超时)、
+  `grok_auth_error`(鉴权)、`grok_parse_error`(响应解析失败),其余仍为
+  `grok_provider_error`,便于排查降级到底是限流/超时还是上游故障。
+
 ## 0.1.14 - 2026-06-05
 
 ### Added

@@ -343,7 +343,7 @@ impl SearchService {
 
         let response = match grok_result {
             Ok(response) => response,
-            Err(_) => {
+            Err(err) => {
                 return self
                     .finalize_fallback(
                         deadline,
@@ -354,7 +354,7 @@ impl SearchService {
                         },
                         raw_sources,
                         raw_origin,
-                        "grok_provider_error",
+                        grok_error_reason(&err),
                         include_content,
                     )
                     .await;
@@ -785,6 +785,20 @@ fn fallback_label(origin: RawSourceOrigin) -> &'static str {
         RawSourceOrigin::Primary => "tavily_fallback",
         RawSourceOrigin::Fallback => "firecrawl_enrichment",
         RawSourceOrigin::None => "tavily_fallback",
+    }
+}
+
+/// Maps a failed Grok call to a stable `fallback_reason` identifier. Kept at
+/// enum-variant granularity on purpose: distinguishing timeout / auth / parse
+/// from a generic provider failure is the diagnostically useful axis, while
+/// sub-parsing HTTP status codes out of `Provider(String)` would be fragile.
+/// `Provider` (and any other variant) preserves the legacy `grok_provider_error`.
+fn grok_error_reason(err: &GrokSearchError) -> &'static str {
+    match err {
+        GrokSearchError::Timeout(_) => "grok_timeout",
+        GrokSearchError::OAuth(_) => "grok_auth_error",
+        GrokSearchError::Parse(_) => "grok_parse_error",
+        _ => "grok_provider_error",
     }
 }
 
