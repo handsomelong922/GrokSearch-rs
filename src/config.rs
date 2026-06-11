@@ -45,6 +45,8 @@ pub struct Config {
     pub source_max_comments: usize,
     pub enrich_concurrency: usize,
     pub enrich_max_chars: usize,
+    pub max_inline_sources: usize,
+    pub response_max_chars: usize,
 }
 
 /// Hand-written `Debug` that masks secret-bearing fields so a stray
@@ -91,6 +93,8 @@ impl std::fmt::Debug for Config {
             .field("source_max_comments", &self.source_max_comments)
             .field("enrich_concurrency", &self.enrich_concurrency)
             .field("enrich_max_chars", &self.enrich_max_chars)
+            .field("max_inline_sources", &self.max_inline_sources)
+            .field("response_max_chars", &self.response_max_chars)
             .finish()
     }
 }
@@ -126,6 +130,8 @@ struct ConfigFile {
     source_max_comments: Option<usize>,
     enrich_concurrency: Option<usize>,
     enrich_max_chars: Option<usize>,
+    max_inline_sources: Option<usize>,
+    response_max_chars: Option<usize>,
 }
 
 impl ConfigFile {
@@ -199,6 +205,14 @@ impl ConfigFile {
         insert(
             "GROK_SEARCH_ENRICH_MAX_CHARS",
             self.enrich_max_chars.map(|n| n.to_string()),
+        );
+        insert(
+            "GROK_SEARCH_MAX_INLINE_SOURCES",
+            self.max_inline_sources.map(|n| n.to_string()),
+        );
+        insert(
+            "GROK_SEARCH_RESPONSE_MAX_CHARS",
+            self.response_max_chars.map(|n| n.to_string()),
         );
         out
     }
@@ -297,6 +311,8 @@ impl Config {
             source_max_comments: usize_value(&map, "GROK_SEARCH_SOURCE_MAX_COMMENTS", 30),
             enrich_concurrency: usize_value(&map, "GROK_SEARCH_ENRICH_CONCURRENCY", 3).clamp(1, 5),
             enrich_max_chars: usize_value(&map, "GROK_SEARCH_ENRICH_MAX_CHARS", 15000),
+            max_inline_sources: usize_value(&map, "GROK_SEARCH_MAX_INLINE_SOURCES", 5),
+            response_max_chars: usize_value(&map, "GROK_SEARCH_RESPONSE_MAX_CHARS", 60_000),
         }
     }
 
@@ -481,6 +497,8 @@ pub const CONFIG_TEMPLATE: &str = r#"# grok-search-rs global configuration
 # github_token          = "ghp_..."  # GitHub token (optional; anon = 60 req/hr)
 # enrich_concurrency    = 3          # concurrent resolve_content calls per web_search (1..5)
 # enrich_max_chars      = 15000      # per-source inline content char cap
+# max_inline_sources    = 5          # max sources carrying inline content per response
+# response_max_chars    = 60000      # whole-response char budget (answer + inline content)
 "#;
 
 fn load_file_map(path: &Path) -> Option<HashMap<String, String>> {

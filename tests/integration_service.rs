@@ -38,6 +38,7 @@ async fn full_service_web_search_via_chat_completions() {
             extra_sources: None,
             model: None,
             include_content: None,
+            response_format: None,
         })
         .await
         .expect("web_search");

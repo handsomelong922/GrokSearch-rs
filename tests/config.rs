@@ -434,3 +434,17 @@ fn config_path_none_when_no_env_set() {
     let env: [(&str, &str); 0] = [];
     assert!(config::config_path_for(env).is_none());
 }
+
+#[test]
+fn response_budget_defaults_and_env_overrides() {
+    let defaults = Config::from_env_map([] as [(&str, &str); 0]);
+    assert_eq!(defaults.max_inline_sources, 5);
+    assert_eq!(defaults.response_max_chars, 60_000);
+
+    let overridden = Config::from_env_map([
+        ("GROK_SEARCH_MAX_INLINE_SOURCES", "2"),
+        ("GROK_SEARCH_RESPONSE_MAX_CHARS", "30000"),
+    ]);
+    assert_eq!(overridden.max_inline_sources, 2);
+    assert_eq!(overridden.response_max_chars, 30_000);
+}

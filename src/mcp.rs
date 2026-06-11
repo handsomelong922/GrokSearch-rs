@@ -127,6 +127,10 @@ async fn call_tool(service: &SearchService, name: &str, args: Value) -> Result<V
                 include_domains: parse_string_array(args.get("include_domains")),
                 exclude_domains: parse_string_array(args.get("exclude_domains")),
                 include_content: args.get("include_content").and_then(Value::as_bool),
+                response_format: args
+                    .get("response_format")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
             };
             let output = service.web_search(input).await?;
             Ok(serde_json::to_value(output)
@@ -139,7 +143,17 @@ async fn call_tool(service: &SearchService, name: &str, args: Value) -> Result<V
                 .ok_or_else(|| {
                     GrokSearchError::InvalidParams("get_sources.session_id is required".into())
                 })?;
-            let output = service.get_sources(session_id).await?;
+            let offset = args
+                .get("offset")
+                .and_then(Value::as_u64)
+                .map(|value| value as usize)
+                .unwrap_or(0);
+            let limit = args
+                .get("limit")
+                .and_then(Value::as_u64)
+                .map(|value| value as usize)
+                .filter(|value| *value > 0);
+            let output = service.get_sources(session_id, offset, limit).await?;
             Ok(serde_json::to_value(output)
                 .map_err(|err| GrokSearchError::Parse(format!("serialize sources: {err}")))?)
         }
@@ -183,7 +197,7 @@ fn tools_list() -> Value {
         "tools": [
             {
                 "name": "web_search",
-                "description": "Use for discovery — when you don't have a specific URL and need to find information, debug an error, research a topic, or track down an issue or news item. Returns an AI-synthesised answer plus a source list; pass include_content=true (default) to inline the full source text via the resolve_content pipeline. If you already know the exact page URL, use web_fetch instead.",
+                "description": "Use for discovery — when you don't have a specific URL and need to find information, debug an error, research a topic, or track down an issue or news item. Returns an AI-synthesised answer plus a source list. By default the first few sources carry inline content (max_inline_sources, default 5); the rest are metadata-only — drill into any of them with web_fetch(url). The whole response is capped by a character budget; when truncated=true, trimmed sources carry a note telling you how to recover the full text via web_fetch or get_sources. Pass response_format=\"concise\" for answer + source metadata only. If you already know the exact page URL, use web_fetch instead.",
                 "inputSchema": {
                     "type": "object",
                     "required": ["query"],
@@ -214,19 +228,35 @@ fn tools_list() -> Value {
                         "include_content": {
                             "type": "boolean",
                             "default": true,
-                            "description": "Inline source content via the resolve_content pipeline. Default true. Pass false to get summary + source-list only (legacy behavior, no content field in sources)."
+                            "description": "Inline source content via the resolve_content pipeline. Default true. Pass false to get summary + source-list only (legacy behavior, no content field in sources). Superseded by response_format when both are set."
+                        },
+                        "response_format": {
+                            "type": "string",
+                            "enum": ["concise", "detailed"],
+                            "description": "concise = synthesized answer + source metadata only (smallest payload); detailed = inline source content, subject to the response budget. Takes precedence over include_content."
                         }
                     }
                 }
             },
             {
                 "name": "get_sources",
-                "description": "Return cached sources from a previous web_search call by session_id. Use to re-examine sources already retrieved without issuing a new search — it reuses the prior session and runs no new search or fetch.",
+                "description": "Return cached sources from a previous web_search call by session_id. Use to re-examine sources already retrieved without issuing a new search — it reuses the prior session and runs no new search or fetch. Paginate with offset/limit: the response reports total_sources and, when more pages remain, next_offset to pass as the next offset.",
                 "inputSchema": {
                     "type": "object",
                     "required": ["session_id"],
                     "properties": {
-                        "session_id": { "type": "string" }
+                        "session_id": { "type": "string" },
+                        "offset": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "default": 0,
+                            "description": "Index of the first source to return. Use next_offset from the previous page to continue."
+                        },
+                        "limit": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "description": "Max sources in this page. Omit to return all remaining sources (still subject to the response budget)."
+                        }
                     }
                 }
             },

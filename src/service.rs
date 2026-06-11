@@ -308,7 +308,20 @@ impl SearchService {
     pub async fn web_search(&self, input: WebSearchInput) -> Result<WebSearchOutput> {
         // D-02: single global deadline shared by Grok + supplemental fetch + enrichment.
         let deadline = tokio::time::Instant::now() + self.config.timeout;
-        let include_content = input.include_content.unwrap_or(true);
+        // response_format (Anthropic tool-design guidance: concise|detailed)
+        // wins over the legacy include_content flag when both are present.
+        let format_include_content = match input.response_format.as_deref() {
+            None => None,
+            Some("concise") => Some(false),
+            Some("detailed") => Some(true),
+            Some(other) => {
+                return Err(GrokSearchError::InvalidParams(format!(
+                    "response_format must be \"concise\" or \"detailed\", got \"{other}\""
+                )))
+            }
+        };
+        let include_content =
+            format_include_content.unwrap_or_else(|| input.include_content.unwrap_or(true));
 
         let mut uuid_buf = [0u8; uuid::fmt::Simple::LENGTH];
         let session_id = {
@@ -395,6 +408,7 @@ impl SearchService {
                 },
                 self.config.enrich_concurrency,
                 self.config.enrich_max_chars,
+                self.config.max_inline_sources,
                 self.sources.clone(),
                 self.fallback_sources.clone(),
             )
@@ -410,14 +424,25 @@ impl SearchService {
             .await
             .set(session_id.clone(), merged_arc.clone());
 
+        // The cache keeps the full enriched content; only the returned copy is
+        // trimmed to the response budget so drill-down loses nothing.
+        let mut out_sources = (*merged_arc).clone();
+        let truncated = apply_response_budget(
+            response.content.chars().count(),
+            &mut out_sources,
+            self.config.response_max_chars,
+            &session_id,
+        );
+
         Ok(WebSearchOutput {
             session_id,
             content: response.content,
             sources_count,
-            sources: Arc::try_unwrap(merged_arc).unwrap_or_else(|arc| (*arc).clone()),
+            sources: out_sources,
             search_provider: "grok_responses".to_string(),
             fallback_used: false,
             fallback_reason: None,
+            truncated,
         })
     }
 
@@ -485,6 +510,7 @@ impl SearchService {
                 },
                 self.config.enrich_concurrency,
                 self.config.enrich_max_chars,
+                self.config.max_inline_sources,
                 self.sources.clone(),
                 self.fallback_sources.clone(),
             )
@@ -510,29 +536,62 @@ impl SearchService {
             )
         };
 
+        let mut out_sources = (*fallback_arc).clone();
+        let truncated = apply_response_budget(
+            content.chars().count(),
+            &mut out_sources,
+            self.config.response_max_chars,
+            &session_id,
+        );
+
         Ok(WebSearchOutput {
             session_id,
             content,
             sources_count,
-            sources: Arc::try_unwrap(fallback_arc).unwrap_or_else(|arc| (*arc).clone()),
+            sources: out_sources,
             search_provider: "source_fallback".to_string(),
             fallback_used: true,
             fallback_reason: Some(reason.to_string()),
+            truncated,
         })
     }
 
-    pub async fn get_sources(&self, session_id: &str) -> Result<GetSourcesOutput> {
-        let sources = self
+    /// Return one page of cached sources for a prior `web_search` session.
+    /// `offset`/`limit` follow the official MCP fetch server's `start_index`
+    /// continuation pattern, applied to sources; an offset past the end is an
+    /// empty page, not an error. Each page is additionally subject to the
+    /// response budget (`truncated` reports in-page trimming).
+    pub async fn get_sources(
+        &self,
+        session_id: &str,
+        offset: usize,
+        limit: Option<usize>,
+    ) -> Result<GetSourcesOutput> {
+        let cached = self
             .cache
             .lock()
             .await
             .get(session_id)
             .ok_or_else(|| GrokSearchError::NotFound(format!("session_id={session_id}")))?;
-        let sources_count = sources.len();
+        let total_sources = cached.len();
+        let start = offset.min(total_sources);
+        let end = limit
+            .map_or(total_sources, |l| start.saturating_add(l))
+            .min(total_sources);
+        let mut page: Vec<Source> = cached[start..end].to_vec();
+        let truncated =
+            apply_response_budget(0, &mut page, self.config.response_max_chars, session_id);
+        // Budget trimming may shorten the page; continue from what was
+        // actually returned, not from the requested slice end.
+        let served_end = start + page.len();
         Ok(GetSourcesOutput {
             session_id: session_id.to_string(),
-            sources_count,
-            sources: Arc::try_unwrap(sources).unwrap_or_else(|arc| (*arc).clone()),
+            sources_count: page.len(),
+            sources: page,
+            total_sources,
+            offset,
+            next_offset: (served_end < total_sources).then_some(served_end),
+            truncated,
         })
     }
 
@@ -890,13 +949,16 @@ async fn generic_source_fetch(
     ))
 }
 
-/// Concurrently back-fill `Source.content` for every source via the Phase 1
-/// `resolve_content` pipeline. Bounded by `concurrency` (Semaphore) and the
-/// shared `deadline` (D-02: per-source `timeout_at`, not an independent budget).
-/// Every source ends with `content = Some(..)` — real markdown (truncated to
-/// `max_chars`) on success, or a deterministic `_Failed to retrieve: ..._` note
-/// on any failure/timeout/invalid-url (D-05: never None, never empty). Source
-/// order is preserved.
+/// Concurrently back-fill `Source.content` for the first `max_sources` sources
+/// via the Phase 1 `resolve_content` pipeline; later sources stay
+/// metadata-only (content = None) so a Grok response with dozens of citations
+/// cannot blow up the payload — agents drill into them with `web_fetch`.
+/// Bounded by `concurrency` (Semaphore) and the shared `deadline` (D-02:
+/// per-source `timeout_at`, not an independent budget). Every enriched source
+/// ends with `content = Some(..)` — real markdown (truncated to `max_chars`)
+/// on success, or a deterministic `_Failed to retrieve: ..._` note on any
+/// failure/timeout/invalid-url (D-05 within the inline window: never None,
+/// never empty). Source order is preserved.
 #[allow(clippy::too_many_arguments)]
 async fn enrich_sources(
     sources: Vec<Source>,
@@ -906,13 +968,14 @@ async fn enrich_sources(
     caps: crate::sources::SourceCaps,
     concurrency: usize,
     max_chars: usize,
+    max_sources: usize,
     primary: Option<Arc<dyn SourceProvider>>,
     fallback: Option<Arc<dyn SourceProvider>>,
 ) -> Vec<Source> {
     let sem = Arc::new(tokio::sync::Semaphore::new(concurrency));
     let mut set: tokio::task::JoinSet<(usize, Option<String>)> = tokio::task::JoinSet::new();
 
-    for (idx, source) in sources.iter().enumerate() {
+    for (idx, source) in sources.iter().enumerate().take(max_sources) {
         let permit = Arc::clone(&sem);
         let url_str = source.url.clone();
         let client = client.clone();
@@ -982,6 +1045,104 @@ async fn enrich_sources(
         out[idx].content = content;
     }
     out
+}
+
+/// Approximate serialized footprint of one source: every metadata field plus
+/// inline content plus a fixed allowance for JSON keys/quotes/separators. The
+/// budget must track what actually lands in the agent's context — a broad
+/// query where Grok cites 50+ pages overflows on metadata alone, so counting
+/// only inline content under-reports the payload.
+fn source_weight(source: &Source) -> usize {
+    const JSON_OVERHEAD: usize = 64;
+    let opt_chars = |v: &Option<String>| v.as_deref().map(|s| s.chars().count()).unwrap_or(0);
+    source.url.chars().count()
+        + source.provider.chars().count()
+        + opt_chars(&source.title)
+        + opt_chars(&source.description)
+        + opt_chars(&source.published_date)
+        + source
+            .content
+            .as_deref()
+            .map(|c| c.chars().count())
+            .unwrap_or(0)
+        + JSON_OVERHEAD
+}
+
+/// Trim the response from the TAIL until `answer_chars` plus the weighted
+/// source list fits the `budget`. Head sources (Grok's own citations rank
+/// first) survive intact. Two passes:
+///
+/// 1. Replace tail inline content with an actionable note naming `web_fetch`
+///    and `get_sources` — the official MCP fetch server's "call again with
+///    start_index" guidance, applied to sources.
+/// 2. Still over budget (metadata overflow): drop whole tail sources from the
+///    returned list, always keeping at least one.
+///
+/// The synthesized answer is never trimmed. Returns whether anything was
+/// trimmed; callers always trim a clone so the session cache keeps everything.
+fn apply_response_budget(
+    answer_chars: usize,
+    sources: &mut Vec<Source>,
+    budget: usize,
+    session_id: &str,
+) -> bool {
+    let content_chars = |s: &Source| s.content.as_deref().map(|c| c.chars().count()).unwrap_or(0);
+    let mut total: usize = answer_chars + sources.iter().map(source_weight).sum::<usize>();
+    if total <= budget {
+        return false;
+    }
+
+    // Pass 1: swap tail inline content for recovery notes.
+    for idx in (0..sources.len()).rev() {
+        if total <= budget {
+            break;
+        }
+        let len = content_chars(&sources[idx]);
+        if len == 0 {
+            continue;
+        }
+        let url = sources[idx].url.clone();
+        let note = |verb: &str| {
+            format!(
+                "_[{verb}: response budget reached — full text via web_fetch(\"{url}\") or get_sources(session_id=\"{session_id}\", offset={idx}, limit=1)]_"
+            )
+        };
+        let omit_note = note("inline content omitted");
+        let omit_len = omit_note.chars().count();
+        if len <= omit_len {
+            // Replacing would not shrink the payload; leave it alone.
+            continue;
+        }
+        let overshoot = total - budget;
+        let trim_note = note("truncated");
+        // "\n\n" separator + note must fit inside the chars we reclaim.
+        let trim_overhead = trim_note.chars().count() + 2;
+        if len > overshoot + trim_overhead {
+            // Partial trim: keep a prefix so the head of the document survives.
+            let keep = len - overshoot - trim_overhead;
+            let prefix: String = sources[idx]
+                .content
+                .as_deref()
+                .unwrap_or_default()
+                .chars()
+                .take(keep)
+                .collect();
+            sources[idx].content = Some(format!("{prefix}\n\n{trim_note}"));
+            total -= overshoot;
+        } else {
+            sources[idx].content = Some(omit_note);
+            total = total - len + omit_len;
+        }
+    }
+
+    // Pass 2: metadata alone still over budget — cut whole tail sources.
+    // They stay in the cache; get_sources(offset=..) pages through them.
+    while total > budget && sources.len() > 1 {
+        let dropped = sources.pop().expect("len > 1");
+        total -= source_weight(&dropped);
+    }
+
+    true
 }
 
 fn with_provider(
@@ -1675,7 +1836,10 @@ mod enrich_tests {
         let svc = service_with(enrich_config(), router);
 
         let out = svc.web_search(base_input()).await.expect("web_search");
-        let again = svc.get_sources(&out.session_id).await.expect("get_sources");
+        let again = svc
+            .get_sources(&out.session_id, 0, None)
+            .await
+            .expect("get_sources");
 
         assert_eq!(out.sources.len(), again.sources.len());
         for (a, b) in out.sources.iter().zip(again.sources.iter()) {

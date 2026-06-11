@@ -49,7 +49,7 @@ async fn web_search_returns_content_and_caches_sources() {
         .any(|source| source.provider == "grok_responses"));
 
     let sources = service
-        .get_sources(&output.session_id)
+        .get_sources(&output.session_id, 0, None)
         .await
         .expect("sources");
     assert_eq!(sources.sources_count, output.sources_count);
@@ -123,7 +123,7 @@ async fn web_search_uses_env_default_extra_sources_after_grok_success() {
     assert_eq!(output.sources_count, 3);
 
     let cached = service
-        .get_sources(&output.session_id)
+        .get_sources(&output.session_id, 0, None)
         .await
         .expect("cached sources");
 
@@ -231,7 +231,7 @@ async fn web_search_falls_back_to_tavily_when_grok_has_no_sources() {
     assert_eq!(*search_calls.lock().expect("search call lock"), 1);
 
     let cached = service
-        .get_sources(&output.session_id)
+        .get_sources(&output.session_id, 0, None)
         .await
         .expect("cached fallback sources");
     assert_eq!(cached.sources_count, 4);
@@ -542,8 +542,14 @@ async fn get_sources_returns_same_payload_repeatedly() {
         .await
         .expect("search output");
 
-    let a = service.get_sources(&first.session_id).await.expect("a");
-    let b = service.get_sources(&first.session_id).await.expect("b");
+    let a = service
+        .get_sources(&first.session_id, 0, None)
+        .await
+        .expect("a");
+    let b = service
+        .get_sources(&first.session_id, 0, None)
+        .await
+        .expect("b");
     assert_eq!(a.sources_count, b.sources_count);
     assert_eq!(a.sources, b.sources);
 }
