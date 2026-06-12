@@ -102,3 +102,78 @@ fn parses_output_text_fallback() {
     assert_eq!(parsed.content, "Compact answer");
     assert_eq!(parsed.sources[0].url, "https://example.com/a");
 }
+
+// Public-welfare / OpenAI-compatible Grok gateways proxy a real web search but
+// serialize the citations as inline `[[n]](url)` Markdown in the answer text
+// instead of the structured `annotations`/`citations`/`web_search_call` fields.
+// Without inline extraction the structured-source list is empty, `web_search`
+// misfires its source fallback, and every search degrades. The Responses parser
+// must mirror the chat-completions adapter and harvest those inline links.
+#[test]
+fn parses_inline_bracket_citations_from_message_text() {
+    let raw = serde_json::json!({
+        "output": [
+            {
+                "type": "message",
+                "content": [
+                    {
+                        "type": "output_text",
+                        "text": "Trump denied the guarantee.[[1]](https://www.nytimes.com/live/2026/06/07/us/trump-news) He was booed.[[2]](https://www.cnn.com/2026/06/08/us/trump-booed)"
+                    }
+                ]
+            }
+        ]
+    });
+
+    let parsed = parse_grok_responses(&raw).expect("parsed");
+
+    let urls: Vec<_> = parsed.sources.iter().map(|s| s.url.as_str()).collect();
+    assert!(
+        urls.contains(&"https://www.nytimes.com/live/2026/06/07/us/trump-news"),
+        "got {urls:?}"
+    );
+    assert!(
+        urls.contains(&"https://www.cnn.com/2026/06/08/us/trump-booed"),
+        "got {urls:?}"
+    );
+    assert!(parsed
+        .sources
+        .iter()
+        .all(|source| source.provider == "grok_responses"));
+}
+
+#[test]
+fn inline_citations_dedupe_against_structured_sources() {
+    let raw = serde_json::json!({
+        "output": [
+            {
+                "type": "web_search_call",
+                "action": {
+                    "sources": [
+                        {"url": "https://openai.com/news", "title": "OpenAI News"}
+                    ]
+                }
+            },
+            {
+                "type": "message",
+                "content": [
+                    {
+                        "type": "output_text",
+                        "text": "See the news.[[1]](https://openai.com/news) Also new.[[2]](https://openai.com/blog)"
+                    }
+                ]
+            }
+        ]
+    });
+
+    let parsed = parse_grok_responses(&raw).expect("parsed");
+
+    let urls: Vec<_> = parsed.sources.iter().map(|s| s.url.as_str()).collect();
+    assert_eq!(
+        urls.len(),
+        2,
+        "structured + inline must union-dedupe, got {urls:?}"
+    );
+    assert!(urls.contains(&"https://openai.com/news"));
+    assert!(urls.contains(&"https://openai.com/blog"));
+}

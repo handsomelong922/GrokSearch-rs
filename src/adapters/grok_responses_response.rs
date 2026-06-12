@@ -1,4 +1,4 @@
-use crate::adapters::sources::dedupe_sources;
+use crate::adapters::sources::{dedupe_sources, extract_inline_bracket_citations};
 use crate::error::{GrokSearchError, Result};
 use crate::model::search::SearchResponse;
 use crate::model::source::Source;
@@ -22,9 +22,16 @@ pub fn parse_grok_responses(raw: &Value) -> Result<SearchResponse> {
         collect_sources_from_value(citations, &mut sources);
     }
 
+    let content = text_parts.join("\n").trim().to_string();
+
+    // Last-resort path: proxied / OpenAI-compatible Grok gateways often inline
+    // real search citations as `[[n]](url)` Markdown in the answer text instead
+    // of the structured fields above. Harvest those after the structured paths
+    // so dedupe folds duplicates into the richer structured entries.
+    extract_inline_bracket_citations(&content, "grok_responses", &mut sources);
+
     dedupe_sources(&mut sources);
 
-    let content = text_parts.join("\n").trim().to_string();
     if content.is_empty() && sources.is_empty() {
         return Err(GrokSearchError::Parse(
             "Grok Responses payload did not contain text or sources".to_string(),
