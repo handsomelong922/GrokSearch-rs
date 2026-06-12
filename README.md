@@ -11,10 +11,11 @@
 ## Features
 
 - 🔎 **Live web search** with cited sources, cached for follow‑up `get_sources` calls. Opt‑in `include_content` enriches the top sources with full extracted text in one call.
+- 📏 **Response budgeting** — `web_search` keeps responses inside agent context limits: only the top `max_inline_sources` carry inline text, a whole‑response char budget (`response_max_chars`, default 60k) trims tail sources with recovery notes, `response_format: "concise" | "detailed"` picks the payload size, and `get_sources` pages through cached sources with `offset`/`limit`. The session cache always keeps full content.
 - 🧩 **Structured `web_fetch`** — GitHub issues/PRs, StackExchange/MathOverflow, arXiv, and Wikipedia URLs are parsed by specialist extractors into clean Markdown (title, state/labels, accepted‑answer ordering, abstracts, vote‑sorted answers). Anything else falls back to the generic Tavily → Firecrawl chain. Output carries `source_type` and a `fallback_reason` when a specialist was skipped.
 - 🔀 **Two transports** — native xAI Responses (`/v1/responses`) **or** any OpenAI‑compatible chat‑completions gateway (`/v1/chat/completions`). Pick by env vars; no flag.
 - 🔐 **Optional Grok OAuth mode** — `login/status/logout` commands store a local xAI OAuth token for Responses auth, so the MCP server can run without `GROK_SEARCH_API_KEY`.
-- 📥 **Tavily fetch / map** for full‑text extraction and link discovery, with **Firecrawl** as automatic fallback.
+- 📥 **Tavily fetch / map** for full‑text extraction and link discovery, with **Firecrawl** as automatic fallback. `TAVILY_API_KEY` accepts a comma‑separated key list — keys rotate round‑robin with automatic failover on rate/quota errors.
 - 🐦 **Optional X/Twitter search** via `x_search` (Responses transport only).
 - 🩺 **`doctor`** — connectivity probe + redacted config in one tool call.
 - 🗂 **Single global config file** so multiple MCP clients share one set of keys.
@@ -147,7 +148,7 @@ Notes:
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `TAVILY_API_KEY` | — *(required for `web_fetch` / `web_map`)* | Tavily key. |
+| `TAVILY_API_KEY` | — *(required for `web_fetch` / `web_map`)* | Tavily key. Comma‑separated list rotates round‑robin with failover on HTTP 401/403/429/432/433. |
 | `TAVILY_API_URL` | `https://api.tavily.com` | Tavily base. |
 | `GROK_SEARCH_EXTRA_SOURCES` | `3` | Extra Tavily sources after a Grok answer (`0` disables). |
 | `GROK_SEARCH_FALLBACK_SOURCES` | `5` | Fallback source count when the AI step can't verify itself. |
@@ -156,6 +157,8 @@ Notes:
 | `GROK_SEARCH_CACHE_SIZE` | `256` | Max cached `web_search` sessions. |
 | `GROK_SEARCH_TIMEOUT_SECONDS` | `60` | HTTP timeout for all upstreams. |
 | `GROK_SEARCH_FETCH_MAX_CHARS` | unset | Default char cap on `web_fetch`. |
+| `GROK_SEARCH_MAX_INLINE_SOURCES` | `5` | Max `web_search` sources carrying inline content; the rest are metadata‑only. |
+| `GROK_SEARCH_RESPONSE_MAX_CHARS` | `60000` | Whole‑response char budget for `web_search`; over‑budget output is truncated tail‑first with `truncated: true`. |
 
 ### Source extraction (`web_fetch` specialists / `web_search` enrichment)
 
@@ -196,8 +199,8 @@ Tired of duplicating `env` blocks across clients? Run `grok-search-rs --init` on
 
 | Tool | When to call it |
 |---|---|
-| `web_search` | Sourced summary for a topic. Sources cached for follow‑up. Set `include_content: true` to inline full source text. |
-| `get_sources` | Re‑fetch sources of a previous `web_search` by `session_id`. |
+| `web_search` | Sourced summary for a topic. Sources cached for follow‑up. `response_format: "concise"` returns answer + metadata only; `"detailed"` inlines source text within the response budget. |
+| `get_sources` | Re‑fetch sources of a previous `web_search` by `session_id`. Supports `offset` / `limit` pagination for large source sets. |
 | `web_fetch` | Page content as clean Markdown. Specialist extractors for GitHub / StackExchange / arXiv / Wikipedia; generic Tavily → Firecrawl fallback otherwise. Returns `source_type` + `fallback_reason`. |
 | `web_map` | Discover URLs on a domain via Tavily Map. |
 | `doctor` | Live connectivity probe + redacted config. Run first when something looks off. |

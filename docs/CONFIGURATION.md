@@ -63,7 +63,7 @@ GROK_SEARCH_WEB_SEARCH = "true"
 
 | Variable | Default | Description |
 |---|---|---|
-| `TAVILY_API_KEY` | unset | Enables Tavily-backed source enrichment, fallback, fetch, and map. |
+| `TAVILY_API_KEY` | unset | Enables Tavily-backed source enrichment, fallback, fetch, and map. Accepts a single key or a comma-separated list (`tvly-a,tvly-b`); multiple keys rotate round-robin per request, with automatic failover to the next key on key-scoped errors (HTTP 401/403/429/432/433). |
 | `TAVILY_API_URL` | `https://api.tavily.com` | Tavily API base URL. |
 | `TAVILY_ENABLED` | `true` | Optional override. Set to `false` only when you want to disable Tavily even if `TAVILY_API_KEY` is configured. |
 | `GROK_SEARCH_EXTRA_SOURCES` | `3` | Adds Tavily enrichment sources after a verifiable Grok result; Firecrawl can fallback if Tavily returns none. Set `0` to disable enrichment. |
@@ -98,6 +98,18 @@ Tavily/Firecrawl key required.
 | `GROK_SEARCH_SOURCE_MAX_COMMENTS` | `30` | GitHub / StackExchange comments rendered before folding. |
 | `GROK_SEARCH_ENRICH_CONCURRENCY` | `3` | Parallel source enrichments when `web_search` is called with `include_content: true`. Clamped to `1..=5`. |
 | `GROK_SEARCH_ENRICH_MAX_CHARS` | `15000` | Character cap per enriched source body. |
+
+## Response budget
+
+Caps the size of a single `web_search` response so large source sets cannot
+blow past MCP client context limits. The session cache always keeps full
+content; truncated sources carry a note pointing at `web_fetch(url)` /
+`get_sources(session_id)` for recovery.
+
+| Variable | Default | Description |
+|---|---|---|
+| `GROK_SEARCH_MAX_INLINE_SOURCES` | `5` | Maximum sources that carry inline `content` per `web_search` response; the rest return metadata only. |
+| `GROK_SEARCH_RESPONSE_MAX_CHARS` | `60000` | Whole-response character budget (answer + per-source metadata and inline content). Over-budget responses truncate inline content tail-first, then drop trailing sources (always keeping at least one) and set `truncated: true`. |
 
 ## Config file
 
@@ -150,6 +162,8 @@ Unknown keys are rejected by the loader — typos surface as parse errors instea
 | `source_max_comments` | `GROK_SEARCH_SOURCE_MAX_COMMENTS` |
 | `enrich_concurrency` | `GROK_SEARCH_ENRICH_CONCURRENCY` |
 | `enrich_max_chars` | `GROK_SEARCH_ENRICH_MAX_CHARS` |
+| `max_inline_sources` | `GROK_SEARCH_MAX_INLINE_SOURCES` |
+| `response_max_chars` | `GROK_SEARCH_RESPONSE_MAX_CHARS` |
 
 Example — minimum useful file:
 
