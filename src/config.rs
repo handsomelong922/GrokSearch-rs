@@ -461,6 +461,8 @@ pub const CONFIG_TEMPLATE: &str = r#"# grok-search-rs global configuration
 # grok_auth_mode = "api_key"          # api_key | oauth
 # grok_auth_file = "C:\\Users\\you\\.config\\grok-search-rs\\auth.json"
 # tavily_api_key = "tvly-..."         # Tavily key       https://tavily.com
+#                                     # comma-separated list rotates keys round-robin
+#                                     # e.g. "tvly-a,tvly-b" (failover on 401/429/432/433)
 
 # ── Common knobs ──────────────────────────────────────────────
 # grok_model         = "grok-4-1-fast-reasoning"

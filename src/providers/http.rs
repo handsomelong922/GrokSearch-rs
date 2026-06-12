@@ -20,6 +20,25 @@ pub fn build_client(timeout: Duration) -> Client {
         .unwrap_or_else(|_| Client::new())
 }
 
+/// Failure from [`post_json_with_status`]. `status` is the upstream HTTP
+/// status when the request reached the server and came back non-2xx; `None`
+/// for transport, timeout, body-read, and parse failures. Lets callers make
+/// status-driven retry decisions (e.g. API-key rotation) without parsing
+/// error strings.
+pub struct HttpFailure {
+    pub status: Option<u16>,
+    pub error: GrokSearchError,
+}
+
+impl HttpFailure {
+    fn transport(error: GrokSearchError) -> Self {
+        Self {
+            status: None,
+            error,
+        }
+    }
+}
+
 /// Issue an authenticated JSON POST and normalize transport / status / parse
 /// errors into `GrokSearchError`. `label` appears in error messages to
 /// distinguish upstream providers (e.g. "Tavily", "Firecrawl", "Grok Responses").
@@ -30,6 +49,20 @@ pub async fn post_json(
     body: &Value,
     label: &str,
 ) -> Result<Value> {
+    post_json_with_status(client, endpoint, api_key, body, label)
+        .await
+        .map_err(|failure| failure.error)
+}
+
+/// Status-aware variant of [`post_json`]: identical behavior, but non-2xx
+/// responses carry their HTTP status alongside the normalized error.
+pub async fn post_json_with_status(
+    client: &Client,
+    endpoint: &str,
+    api_key: &str,
+    body: &Value,
+    label: &str,
+) -> std::result::Result<Value, HttpFailure> {
     let mut response = client
         .post(endpoint)
         .bearer_auth(api_key)
@@ -37,11 +70,11 @@ pub async fn post_json(
         .send()
         .await
         .map_err(|err| {
-            if err.is_timeout() {
+            HttpFailure::transport(if err.is_timeout() {
                 GrokSearchError::Timeout(format!("{label} request timed out: {err}"))
             } else {
                 GrokSearchError::Provider(format!("{label} request failed: {err}"))
-            }
+            })
         })?;
 
     let status = response.status();
@@ -53,23 +86,30 @@ pub async fn post_json(
         .to_ascii_lowercase();
 
     if status.is_success() && content_type.starts_with("text/event-stream") {
-        return read_sse_json(&mut response, label).await;
+        return read_sse_json(&mut response, label)
+            .await
+            .map_err(HttpFailure::transport);
     }
 
-    let bytes = response
-        .bytes()
-        .await
-        .map_err(|err| GrokSearchError::Provider(format!("{label} body read failed: {err}")))?;
+    let bytes = response.bytes().await.map_err(|err| {
+        HttpFailure::transport(GrokSearchError::Provider(format!(
+            "{label} body read failed: {err}"
+        )))
+    })?;
 
     if !status.is_success() {
         let text = String::from_utf8_lossy(&bytes);
-        return Err(GrokSearchError::Provider(format!(
-            "{label} returned HTTP {status}: {text}"
-        )));
+        return Err(HttpFailure {
+            status: Some(status.as_u16()),
+            error: GrokSearchError::Provider(format!("{label} returned HTTP {status}: {text}")),
+        });
     }
 
-    serde_json::from_slice(&bytes)
-        .map_err(|err| GrokSearchError::Parse(format!("invalid {label} JSON: {err}")))
+    serde_json::from_slice(&bytes).map_err(|err| {
+        HttpFailure::transport(GrokSearchError::Parse(format!(
+            "invalid {label} JSON: {err}"
+        )))
+    })
 }
 
 async fn read_sse_json(response: &mut Response, label: &str) -> Result<Value> {
