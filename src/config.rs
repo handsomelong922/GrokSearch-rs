@@ -468,6 +468,8 @@ pub const CONFIG_TEMPLATE: &str = r#"# grok-search-rs global configuration
 # grok_model         = "grok-4-1-fast-reasoning"
 # x_search_enabled   = false          # Grok X/Twitter search tool
 # firecrawl_api_key  = "fc-..."       # Optional fetch fallback   https://firecrawl.dev
+#                                     # comma-separated list rotates keys round-robin
+#                                     # e.g. "fc-a,fc-b" (failover on 401/402/403/429)
 
 # ── Endpoints (only set when using a self-hosted gateway) ─────
 # grok_api_url      = "https://api.x.ai"

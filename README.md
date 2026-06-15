@@ -4,7 +4,7 @@
 
 **A lightweight Rust MCP server for Grok / OpenAI‑compatible web search, plus Tavily fetch/map and Firecrawl fallback.**
 
-`grok-search-rs` is an **MCP stdio server** — your client (Claude Code, Codex, Cursor, VS Code, …) launches it; you do not run it directly. It exposes one set of tools (`web_search`, `get_sources`, `web_fetch`, `web_map`, `doctor`) and supports two upstream transports so you can plug into either xAI's official API or any OpenAI‑compatible relay.
+`grok-search-rs` is an **MCP stdio server by default** — your client (Claude Code, Codex, Cursor, VS Code, …) launches it locally. It can also run a minimal HTTP MCP endpoint for hosted deployments such as Hugging Face Spaces. It exposes one set of tools (`web_search`, `get_sources`, `web_fetch`, `web_map`, `doctor`) and supports two upstream transports so you can plug into either xAI's official API or any OpenAI‑compatible relay.
 
 ---
 
@@ -15,7 +15,7 @@
 - 🧩 **Structured `web_fetch`** — GitHub issues/PRs, StackExchange/MathOverflow, arXiv, and Wikipedia URLs are parsed by specialist extractors into clean Markdown (title, state/labels, accepted‑answer ordering, abstracts, vote‑sorted answers). Anything else falls back to the generic Tavily → Firecrawl chain. Output carries `source_type` and a `fallback_reason` when a specialist was skipped.
 - 🔀 **Two transports** — native xAI Responses (`/v1/responses`) **or** any OpenAI‑compatible chat‑completions gateway (`/v1/chat/completions`). Pick by env vars; no flag.
 - 🔐 **Optional Grok OAuth mode** — `login/status/logout` commands store a local xAI OAuth token for Responses auth, so the MCP server can run without `GROK_SEARCH_API_KEY`.
-- 📥 **Tavily fetch / map** for full‑text extraction and link discovery, with **Firecrawl** as automatic fallback. `TAVILY_API_KEY` accepts a comma‑separated key list — keys rotate round‑robin with automatic failover on rate/quota errors.
+- 📥 **Tavily fetch / map** for full‑text extraction and link discovery, with **Firecrawl** as automatic fallback. `TAVILY_API_KEY` and `FIRECRAWL_API_KEY` accept comma‑separated key lists — keys rotate round‑robin with automatic failover on rate/quota errors.
 - 🐦 **Optional X/Twitter search** via `x_search` (Responses transport only).
 - 🩺 **`doctor`** — connectivity probe + redacted config in one tool call.
 - 🗂 **Single global config file** so multiple MCP clients share one set of keys.
@@ -92,6 +92,20 @@ The npm package ships a native Rust binary; the `grok-search-rs` command is what
 
 Pick **one** transport group. Both Tavily and Firecrawl keys are shared across transports.
 
+### Hosted HTTP MCP
+
+Local stdio remains the default. For hosted clients that accept an HTTP MCP URL, run:
+
+```bash
+grok-search-rs serve-http
+```
+
+The server listens on `HOST:PORT` (`0.0.0.0:3000` by default) and exposes JSON-RPC MCP at `/mcp` (uppercase `/MCP` also works). You can also set `GROK_SEARCH_MCP_TRANSPORT=http` instead of passing the command. The included `Dockerfile` uses this mode for Hugging Face Spaces, where the public MCP URL is:
+
+```text
+https://<space-subdomain>.hf.space/mcp
+```
+
 ### A. Native Grok Responses (default)
 
 | Variable | Default | Purpose |
@@ -152,7 +166,7 @@ Notes:
 | `TAVILY_API_URL` | `https://api.tavily.com` | Tavily base. |
 | `GROK_SEARCH_EXTRA_SOURCES` | `3` | Extra Tavily sources after a Grok answer (`0` disables). |
 | `GROK_SEARCH_FALLBACK_SOURCES` | `5` | Fallback source count when the AI step can't verify itself. |
-| `FIRECRAWL_API_KEY` | unset | Enables Firecrawl as `web_fetch` / source fallback. |
+| `FIRECRAWL_API_KEY` | unset | Enables Firecrawl as `web_fetch` / source fallback. Comma‑separated lists rotate round‑robin with failover on HTTP 401/402/403/429. |
 | `FIRECRAWL_API_URL` | `https://api.firecrawl.dev` | Firecrawl base. |
 | `GROK_SEARCH_CACHE_SIZE` | `256` | Max cached `web_search` sessions. |
 | `GROK_SEARCH_TIMEOUT_SECONDS` | `60` | HTTP timeout for all upstreams. |

@@ -2,7 +2,7 @@ use crate::error::{GrokSearchError, Result};
 use crate::model::tool::WebSearchInput;
 use crate::service::SearchService;
 use serde_json::{json, Value};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 
 pub async fn run_stdio(service: SearchService) -> anyhow::Result<()> {
     let stdin = tokio::io::stdin();
@@ -30,6 +30,142 @@ pub async fn run_stdio(service: SearchService) -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+pub async fn run_http(service: SearchService, bind: &str) -> anyhow::Result<()> {
+    let listener = tokio::net::TcpListener::bind(bind).await?;
+    eprintln!("grok-search-rs: HTTP MCP listening on http://{bind}/mcp");
+    loop {
+        let (stream, _) = listener.accept().await?;
+        let service = service.clone();
+        tokio::spawn(async move {
+            if let Err(err) = handle_http_connection(service, stream).await {
+                eprintln!("grok-search-rs: HTTP connection error: {err}");
+            }
+        });
+    }
+}
+
+async fn handle_http_connection(
+    service: SearchService,
+    stream: tokio::net::TcpStream,
+) -> anyhow::Result<()> {
+    let mut reader = BufReader::new(stream);
+    let mut request_line = String::new();
+    if reader.read_line(&mut request_line).await? == 0 {
+        return Ok(());
+    }
+    let mut parts = request_line.split_whitespace();
+    let method = parts.next().unwrap_or_default().to_ascii_uppercase();
+    let path = parts.next().unwrap_or_default().to_string();
+
+    let mut content_length = 0usize;
+    loop {
+        let mut header = String::new();
+        if reader.read_line(&mut header).await? == 0 {
+            return Ok(());
+        }
+        let header = header.trim_end_matches(['\r', '\n']);
+        if header.is_empty() {
+            break;
+        }
+        if let Some((name, value)) = header.split_once(':') {
+            if name.eq_ignore_ascii_case("content-length") {
+                content_length = value.trim().parse().unwrap_or(0);
+            }
+        }
+    }
+
+    let is_mcp_post = method == "POST" && matches!(path.as_str(), "/mcp" | "/MCP");
+    let mut body = Vec::new();
+    if is_mcp_post {
+        body.resize(content_length, 0);
+        if content_length > 0 {
+            reader.read_exact(&mut body).await?;
+        }
+    }
+
+    let mut stream = reader.into_inner();
+    match (method.as_str(), path.as_str()) {
+        ("GET", "/") | ("GET", "/mcp") | ("GET", "/MCP") => {
+            write_json_response(&mut stream, 200, http_info()).await?
+        }
+        ("OPTIONS", "/mcp") | ("OPTIONS", "/MCP") => write_empty_response(&mut stream, 204).await?,
+        ("POST", "/mcp") | ("POST", "/MCP") => {
+            let request: Value = match serde_json::from_slice(&body) {
+                Ok(value) => value,
+                Err(err) => {
+                    let response =
+                        error_response(Value::Null, -32700, format!("parse error: {err}"));
+                    write_json_response(&mut stream, 400, response).await?;
+                    return Ok(());
+                }
+            };
+            match handle_message(&service, request).await {
+                Some(response) => write_json_response(&mut stream, 200, response).await?,
+                None => write_empty_response(&mut stream, 202).await?,
+            }
+        }
+        _ => {
+            let response = json!({ "error": "not found", "endpoint": "/mcp" });
+            write_json_response(&mut stream, 404, response).await?;
+        }
+    }
+    Ok(())
+}
+
+fn http_info() -> Value {
+    json!({
+        "name": "grok-search-rs",
+        "version": env!("CARGO_PKG_VERSION"),
+        "transport": "streamable_http",
+        "endpoint": "/mcp"
+    })
+}
+
+async fn write_json_response(
+    stream: &mut tokio::net::TcpStream,
+    status: u16,
+    body: Value,
+) -> anyhow::Result<()> {
+    let body = body.to_string().into_bytes();
+    write_response(stream, status, "application/json", &body).await
+}
+
+async fn write_empty_response(
+    stream: &mut tokio::net::TcpStream,
+    status: u16,
+) -> anyhow::Result<()> {
+    write_response(stream, status, "text/plain", b"").await
+}
+
+async fn write_response(
+    stream: &mut tokio::net::TcpStream,
+    status: u16,
+    content_type: &str,
+    body: &[u8],
+) -> anyhow::Result<()> {
+    let head = format!(
+        "HTTP/1.1 {} {}\r\nContent-Type: {}\r\nContent-Length: {}\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Headers: content-type\r\nAccess-Control-Allow-Methods: GET, POST, OPTIONS\r\nConnection: close\r\n\r\n",
+        status,
+        status_text(status),
+        content_type,
+        body.len()
+    );
+    stream.write_all(head.as_bytes()).await?;
+    stream.write_all(body).await?;
+    Ok(())
+}
+
+fn status_text(status: u16) -> &'static str {
+    match status {
+        200 => "OK",
+        202 => "Accepted",
+        204 => "No Content",
+        400 => "Bad Request",
+        404 => "Not Found",
+        _ => "OK",
+    }
 }
 
 async fn handle_message(service: &SearchService, request: Value) -> Option<Value> {

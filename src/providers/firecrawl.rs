@@ -1,15 +1,56 @@
 use crate::error::{GrokSearchError, Result};
 use crate::model::source::Source;
-use crate::providers::http::{build_client, post_json};
+use crate::providers::http::{build_client, post_json_with_status};
 use reqwest::Client;
 use serde_json::{json, Value};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
+
+struct KeyRing {
+    keys: Vec<String>,
+    cursor: AtomicUsize,
+}
+
+impl KeyRing {
+    fn parse(raw: &str) -> Self {
+        let mut keys: Vec<String> = raw
+            .split(',')
+            .map(str::trim)
+            .filter(|segment| !segment.is_empty())
+            .map(str::to_string)
+            .collect();
+        if keys.is_empty() {
+            keys.push(raw.to_string());
+        }
+        Self {
+            keys,
+            cursor: AtomicUsize::new(0),
+        }
+    }
+
+    fn len(&self) -> usize {
+        self.keys.len()
+    }
+
+    fn start(&self) -> usize {
+        self.cursor.fetch_add(1, Ordering::Relaxed) % self.keys.len()
+    }
+
+    fn key(&self, index: usize) -> &str {
+        &self.keys[index % self.keys.len()]
+    }
+}
+
+fn is_key_scoped_status(status: u16) -> bool {
+    matches!(status, 401 | 402 | 403 | 429)
+}
 
 #[derive(Clone)]
 pub struct FirecrawlProvider {
     client: Client,
     api_url: String,
-    api_key: String,
+    keys: Arc<KeyRing>,
 }
 
 impl FirecrawlProvider {
@@ -27,7 +68,7 @@ impl FirecrawlProvider {
         Self {
             client,
             api_url: api_url.into().trim_end_matches('/').to_string(),
-            api_key: api_key.into(),
+            keys: Arc::new(KeyRing::parse(&api_key.into())),
         }
     }
 
@@ -58,7 +99,32 @@ impl FirecrawlProvider {
 
     async fn post(&self, path: &str, body: &Value) -> Result<Value> {
         let endpoint = format!("{}/{}", self.api_url, path.trim_start_matches('/'));
-        post_json(&self.client, &endpoint, &self.api_key, body, "Firecrawl").await
+        let attempts = self.keys.len();
+        let start = self.keys.start();
+        let mut last_error = None;
+        for offset in 0..attempts {
+            let key = self.keys.key(start + offset);
+            match post_json_with_status(&self.client, &endpoint, key, body, "Firecrawl").await {
+                Ok(value) => return Ok(value),
+                Err(failure) => {
+                    let key_scoped = failure.status.is_some_and(is_key_scoped_status);
+                    if key_scoped && offset + 1 < attempts {
+                        eprintln!(
+                            "grok-search-rs: Firecrawl key {}/{} hit HTTP {}; rotating to next key",
+                            (start + offset) % attempts + 1,
+                            attempts,
+                            failure.status.unwrap_or_default(),
+                        );
+                        last_error = Some(failure.error);
+                        continue;
+                    }
+                    return Err(failure.error);
+                }
+            }
+        }
+        Err(last_error.unwrap_or_else(|| {
+            GrokSearchError::Provider("Firecrawl request failed with no attempts".to_string())
+        }))
     }
 }
 

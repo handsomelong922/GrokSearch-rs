@@ -73,9 +73,24 @@ GROK_SEARCH_WEB_SEARCH = "true"
 
 | Variable | Default | Description |
 |---|---|---|
-| `FIRECRAWL_API_KEY` | unset | Enables Firecrawl fallback for `web_fetch` and supplemental fallback sources. |
+| `FIRECRAWL_API_KEY` | unset | Enables Firecrawl fallback for `web_fetch` and supplemental fallback sources. Accepts a single key or a comma-separated list (`fc-a,fc-b`); multiple keys rotate round-robin per request, with automatic failover to the next key on key-scoped errors (HTTP 401/402/403/429). |
 | `FIRECRAWL_API_URL` | `https://api.firecrawl.dev` | Firecrawl API base URL, normalized to `/v1`. |
 | `FIRECRAWL_ENABLED` | `true` | Optional override. Set to `false` to disable Firecrawl even if a key is configured. |
+
+## HTTP MCP hosting
+
+Stdio remains the default transport. Hosted deployments can expose the same
+JSON-RPC MCP surface over HTTP:
+
+```bash
+grok-search-rs serve-http
+```
+
+The endpoint is `/mcp` (uppercase `/MCP` is also accepted). Binding is resolved
+from `GROK_SEARCH_HTTP_BIND`, or from `HOST` + `PORT`, or finally
+`0.0.0.0:3000`. Setting `GROK_SEARCH_MCP_TRANSPORT=http` enables the same mode
+without a CLI argument. Hugging Face Spaces should keep API keys as Space
+secrets/environment variables, not committed files.
 
 ## Cache
 

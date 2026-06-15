@@ -36,6 +36,12 @@ async fn main() -> anyhow::Result<()> {
 
     let cfg = Config::load();
 
+    if wants_http(&args) {
+        let service = grok_search_rs::service::SearchService::new(cfg)?;
+        grok_search_rs::mcp::run_http(service, &http_bind_addr()).await?;
+        return Ok(());
+    }
+
     // Detect interactive run with missing credentials and print a friendly
     // onboarding guide instead of a cryptic error. MCP clients always pipe
     // stdio, so a TTY here means the user ran the binary directly.
@@ -50,6 +56,30 @@ async fn main() -> anyhow::Result<()> {
     let service = grok_search_rs::service::SearchService::new(cfg)?;
     grok_search_rs::mcp::run_stdio(service).await?;
     Ok(())
+}
+
+fn wants_http(args: &[String]) -> bool {
+    let arg_http = args
+        .first()
+        .map(|arg| matches!(arg.as_str(), "serve-http" | "http" | "--http"))
+        .unwrap_or(false);
+    let env_http = std::env::var("GROK_SEARCH_MCP_TRANSPORT")
+        .map(|value| value.eq_ignore_ascii_case("http"))
+        .unwrap_or(false);
+    arg_http || env_http
+}
+
+fn http_bind_addr() -> String {
+    if let Ok(bind) = std::env::var("GROK_SEARCH_HTTP_BIND") {
+        if !bind.trim().is_empty() {
+            return bind;
+        }
+    }
+    let host = std::env::var("HOST").unwrap_or_else(|_| "0.0.0.0".to_string());
+    let port = std::env::var("PORT")
+        .or_else(|_| std::env::var("GROK_SEARCH_HTTP_PORT"))
+        .unwrap_or_else(|_| "3000".to_string());
+    format!("{host}:{port}")
 }
 
 async fn run_login(cfg: &Config) -> anyhow::Result<()> {
@@ -139,6 +169,10 @@ fn print_setup_guide() {
         r#"grok-search-rs is an MCP server. It speaks JSON-RPC over stdio and
 should be launched by an MCP client (Claude Code, Codex CLI, Gemini CLI,
 Cursor, VS Code, Windsurf, ...), not run directly.
+
+Hosted HTTP mode
+  grok-search-rs serve-http
+  Exposes JSON-RPC MCP at http://HOST:PORT/mcp (default 0.0.0.0:3000).
 
 Required keys
   GROK_SEARCH_API_KEY   xAI / Grok-compatible key   (https://x.ai/api)
