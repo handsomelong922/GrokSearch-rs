@@ -1,3 +1,13 @@
+---
+title: GrokSearch-rs
+emoji: 🔎
+colorFrom: blue
+colorTo: gray
+sdk: docker
+app_port: 7860
+pinned: false
+---
+
 # GrokSearch-rs
 
 ![GrokSearch-rs product banner](assets/groksearch-rs-banner.png)
